@@ -215,10 +215,10 @@ struct RecordingHUD: View {
             return 0.35 + 0.65 * exp(-x * x)
         }
     }()
-    private let barWidth: CGFloat = 4
+    private let barWidth: CGFloat = 5
     private let barSpacing: CGFloat = 3.5
-    private let minH: CGFloat = 5
-    private let maxH: CGFloat = 28
+    private let minH: CGFloat = 4
+    private let maxH: CGFloat = 46
 
     var body: some View {
         HStack(spacing: 18) {
@@ -244,12 +244,12 @@ struct RecordingHUD: View {
                             .shadow(color: neonCyan.opacity(0.5), radius: 3)
                             .frame(width: barWidth, height: h)
                             .animation(
-                                .interpolatingSpring(stiffness: 280, damping: 12),
+                                .interpolatingSpring(stiffness: 180, damping: 8),
                                 value: h
                             )
                     }
                 }
-                .frame(height: 32)
+                .frame(height: 50)
             }
 
             // Confirm
@@ -280,9 +280,14 @@ struct RecordingHUD: View {
 
     private func barH(_ i: Int, _ t: Double) -> CGFloat {
         let w = weights[i]
-        // ±4% jitter per bar (different phase per bar)
-        let jitter = 1.0 + sin(t * 11.0 + Double(i) * 2.7) * 0.04
-        let h = minH + level * w * CGFloat(jitter) * (maxH - minH)
+        let fi = Double(i)
+        // Multi-frequency jitter for lively movement
+        let j1 = sin(t * 13.0 + fi * 2.7) * 0.22
+        let j2 = sin(t * 7.3 + fi * 4.1) * 0.15
+        let jitter = 1.0 + j1 + j2
+        // Ensure at least ~20% amplitude even at low audio levels
+        let boosted = max(level, 0.2)
+        let h = minH + boosted * w * CGFloat(jitter) * (maxH - minH)
         return max(minH, h)
     }
 }
@@ -295,6 +300,12 @@ struct CyberTextCard: View {
     let text: String
     @State private var dotPhase = 0
     @State private var timer: Timer?
+
+    /// Show only the tail when text is very long so the card stays compact.
+    private var tailText: String {
+        if text.count <= 400 { return text }
+        return "…" + text.suffix(400)
+    }
 
     var body: some View {
         CyberCard(accent: accent) {
@@ -322,12 +333,11 @@ struct CyberTextCard: View {
                 if text.isEmpty {
                     CyberShimmer(color: accent)
                 } else {
-                    Text(text)
+                    Text(tailText)
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.9))
                         .shadow(color: accent.opacity(0.15), radius: 2)
                         .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -407,7 +417,7 @@ struct CyberDoneCard: View {
                 Text(text.isEmpty ? "DONE" : text)
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
