@@ -87,6 +87,17 @@ final class OverlayViewModel: ObservableObject {
 struct OverlayRootView: View {
     @ObservedObject var vm: OverlayViewModel
 
+    /// Only changes when the visual layout actually switches (recording ↔ text ↔ error).
+    /// Recognizing/translating/done all share the same text card, so no animation between them.
+    private var visualPhase: Int {
+        switch vm.stage {
+        case .recording: return 0
+        case .recognizing, .translating, .done: return 1
+        case .error: return 2
+        default: return -1
+        }
+    }
+
     var body: some View {
         Group {
             switch vm.stage {
@@ -97,19 +108,16 @@ struct OverlayRootView: View {
                     onCancel: vm.onCancel,
                     onConfirm: vm.onConfirm
                 )
-            case .recognizing:
+            case .recognizing, .translating, .done:
                 if vm.isTranslation {
-                    CyberTranslatingCard(asrText: vm.asrText, gptText: vm.gptText, isTranscribing: true)
+                    CyberTranslatingCard(
+                        asrText: vm.asrText,
+                        gptText: vm.gptText,
+                        isTranscribing: vm.stage == .recognizing,
+                        isDone: vm.stage == .done
+                    )
                 } else {
-                    CyberTextCard(accent: neonCyan, label: "TRANSCRIBING", text: vm.asrText)
-                }
-            case .translating:
-                CyberTranslatingCard(asrText: vm.asrText, gptText: vm.gptText, isTranscribing: false)
-            case .done:
-                if vm.isTranslation && !vm.gptText.isEmpty {
-                    CyberTranslatingCard(asrText: vm.asrText, gptText: vm.gptText, isTranscribing: false)
-                } else {
-                    CyberDoneCard(text: vm.gptText.isEmpty ? vm.asrText : vm.gptText)
+                    CyberTextCard(accent: neonCyan, label: vm.stage == .done ? "TRANSCRIBED" : "TRANSCRIBING", text: vm.asrText)
                 }
             case .error:
                 CyberInfoCard(label: "ERROR", accent: Color(red: 1, green: 0.2, blue: 0.2))
@@ -117,7 +125,7 @@ struct OverlayRootView: View {
                 EmptyView()
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: vm.stage)
+        .animation(.easeInOut(duration: 0.2), value: visualPhase)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -285,12 +293,15 @@ struct CyberTextCard: View {
         return "…" + text.suffix(400)
     }
 
+    private var isDone: Bool { label == "TRANSCRIBED" }
+
     var body: some View {
         CyberCard(accent: accent) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     SpinArc(color: accent)
                         .frame(width: 14, height: 14)
+                        .opacity(isDone ? 0 : 1)
 
                     Text(label)
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -306,7 +317,9 @@ struct CyberTextCard: View {
                                 .animation(.easeInOut(duration: 0.15), value: dotPhase)
                         }
                     }
+                    .opacity(isDone ? 0 : 1)
                 }
+                .frame(maxWidth: .infinity)
 
                 if text.isEmpty {
                     CyberShimmer(color: accent)
@@ -382,6 +395,7 @@ struct CyberTranslatingCard: View {
     let asrText: String
     let gptText: String
     var isTranscribing: Bool = false
+    var isDone: Bool = false
     @State private var dotPhase = 0
     @State private var timer: Timer?
 
@@ -394,33 +408,32 @@ struct CyberTranslatingCard: View {
         return "…" + gptText.suffix(400)
     }
 
+    private var showSpinner: Bool { !isTranscribing && !isDone }
+
     var body: some View {
         CyberCard(accent: neonMagenta) {
             VStack(alignment: .leading, spacing: 14) {
                 // ASR original text
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        if isTranscribing {
-                            SpinArc(color: neonCyan)
-                                .frame(width: 14, height: 14)
-                            Text("TRANSCRIBING")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(neonCyan)
-                                .shadow(color: neonCyan.opacity(0.6), radius: 3)
-                            HStack(spacing: 3) {
-                                ForEach(0..<3, id: \.self) { i in
-                                    Circle()
-                                        .fill(neonCyan.opacity(i < dotPhase ? 0.9 : 0.15))
-                                        .frame(width: 4, height: 4)
-                                        .animation(.easeInOut(duration: 0.15), value: dotPhase)
-                                }
+                        SpinArc(color: neonCyan)
+                            .frame(width: 14, height: 14)
+                            .opacity(isTranscribing ? 1 : 0)
+                        Text(isTranscribing ? "TRANSCRIBING" : "TRANSCRIBED")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(neonCyan.opacity(isTranscribing ? 1 : 0.7))
+                            .shadow(color: neonCyan.opacity(isTranscribing ? 0.6 : 0), radius: 3)
+                        HStack(spacing: 3) {
+                            ForEach(0..<3, id: \.self) { i in
+                                Circle()
+                                    .fill(neonCyan.opacity(i < dotPhase ? 0.9 : 0.15))
+                                    .frame(width: 4, height: 4)
+                                    .animation(.easeInOut(duration: 0.15), value: dotPhase)
                             }
-                        } else {
-                            Text("ORIGINAL")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(neonCyan.opacity(0.7))
                         }
+                        .opacity(isTranscribing ? 1 : 0)
                     }
+                    .frame(maxWidth: .infinity)
 
                     if asrText.isEmpty {
                         CyberShimmer(color: neonCyan)
@@ -429,7 +442,7 @@ struct CyberTranslatingCard: View {
                             .font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(.white.opacity(isTranscribing ? 0.9 : 0.5))
                             .lineSpacing(3)
-                            .lineLimit(isTranscribing ? 6 : 3)
+                            .lineLimit(3)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -442,33 +455,35 @@ struct CyberTranslatingCard: View {
                 // Translation
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        if !isTranscribing {
-                            SpinArc(color: neonMagenta)
-                                .frame(width: 14, height: 14)
-                        }
-                        Text("TRANSLATION")
+                        SpinArc(color: neonMagenta)
+                            .frame(width: 14, height: 14)
+                            .opacity(showSpinner ? 1 : 0)
+                        Text(isDone ? "TRANSLATED" : "TRANSLATION")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
                             .foregroundStyle(neonMagenta.opacity(isTranscribing ? 0.3 : 1))
                             .shadow(color: neonMagenta.opacity(isTranscribing ? 0 : 0.6), radius: 3)
-                        if !isTranscribing {
-                            HStack(spacing: 3) {
-                                ForEach(0..<3, id: \.self) { i in
-                                    Circle()
-                                        .fill(neonMagenta.opacity(i < dotPhase ? 0.9 : 0.15))
-                                        .frame(width: 4, height: 4)
-                                        .shadow(color: neonMagenta.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
-                                        .animation(.easeInOut(duration: 0.15), value: dotPhase)
-                                }
+                        HStack(spacing: 3) {
+                            ForEach(0..<3, id: \.self) { i in
+                                Circle()
+                                    .fill(neonMagenta.opacity(i < dotPhase ? 0.9 : 0.15))
+                                    .frame(width: 4, height: 4)
+                                    .shadow(color: neonMagenta.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
+                                    .animation(.easeInOut(duration: 0.15), value: dotPhase)
                             }
                         }
+                        .opacity(showSpinner ? 1 : 0)
                     }
+                    .frame(maxWidth: .infinity)
 
-                    if isTranscribing {
-                        Text("Waiting for transcription...")
+                    if gptText.isEmpty {
+                        Text(isTranscribing ? "Waiting for transcription..." : "")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.2))
-                    } else if gptText.isEmpty {
-                        CyberShimmer(color: neonMagenta)
+                            .frame(height: 14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .overlay {
+                                if !isTranscribing { CyberShimmer(color: neonMagenta) }
+                            }
                     } else {
                         Text(tailGPT)
                             .font(.system(size: 14, design: .monospaced))

@@ -207,8 +207,7 @@ final class AppState: @unchecked Sendable {
                 guard let self else { return }
                 self.asrAccum += text
                 self.asrText = self.asrAccum
-                if self.stage == .recording || self.stage == .recognizing {
-                    self.stage = .recognizing
+                if self.stage == .recognizing {
                     self.setOverlayStage(.recognizing, asr: self.asrText)
                 }
             }
