@@ -1,0 +1,7 @@
+.build/
+SuperVibe.app/
+*.o
+.DS_Store
+.swiftpm/
+/tmp/
+/tools/__pycache__/
