@@ -3,7 +3,6 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let appState = AppState()
-    private var accessibilityTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBar()
@@ -25,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         rebuildMenu()
 
-        // Observe recording state to update icon
         appState.onRecordingChanged = { [weak self] isRecording in
             DispatchQueue.main.async {
                 self?.statusItem.button?.image = NSImage(
@@ -41,26 +39,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         // Record toggle
-        let recordTitle = appState.isRecording ? "Stop Recording" : "Start Recording"
-        let recordItem = NSMenuItem(title: recordTitle, action: #selector(toggleRecord), keyEquivalent: "r")
-        recordItem.target = self
-        menu.addItem(recordItem)
+        if appState.isRecording {
+            let stop = NSMenuItem(title: "Stop Recording", action: #selector(toggleRecord), keyEquivalent: "")
+            stop.target = self
+            menu.addItem(stop)
+
+            let cancel = NSMenuItem(title: "Cancel (ESC)", action: #selector(cancelRecord), keyEquivalent: "")
+            cancel.target = self
+            menu.addItem(cancel)
+        } else {
+            let start = NSMenuItem(title: "Start Recording", action: #selector(toggleRecord), keyEquivalent: "")
+            start.target = self
+            menu.addItem(start)
+        }
 
         menu.addItem(.separator())
 
-        // Polishing
-        let polishItem = NSMenuItem(title: "Polishing (GPT)", action: #selector(togglePolish), keyEquivalent: "")
-        polishItem.target = self
-        polishItem.state = appState.postprocessEnabled ? .on : .off
-        menu.addItem(polishItem)
-
         // Translation submenu
         let transMenu = NSMenu()
-        for (label, code) in [
-            ("Off", nil), ("English", "en"), ("Chinese", "zh"),
-            ("Japanese", "ja"), ("Korean", "ko"), ("French", "fr"),
-            ("Spanish", "es"), ("German", "de"),
-        ] as [(String, String?)] {
+        let languages: [(String, String?)] = [
+            ("Off", nil),
+            ("English", "en"),
+            ("Chinese", "zh"),
+            ("Japanese", "ja"),
+            ("Korean", "ko"),
+            ("French", "fr"),
+            ("Spanish", "es"),
+            ("German", "de"),
+        ]
+        for (label, code) in languages {
             let item = NSMenuItem(title: label, action: #selector(setTranslation(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = code
@@ -68,26 +75,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             transMenu.addItem(item)
         }
         let transItem = NSMenuItem(title: "Translation", action: nil, keyEquivalent: "")
+        if let lang = appState.translationLanguage {
+            transItem.title = "Translation (\(lang.uppercased()))"
+        }
         transItem.submenu = transMenu
         menu.addItem(transItem)
 
         menu.addItem(.separator())
 
-        // Status
-        let statusItem = NSMenuItem(title: appState.statusText, action: nil, keyEquivalent: "")
-        statusItem.isEnabled = false
-        menu.addItem(statusItem)
-
-        menu.addItem(.separator())
-
-        // Hotkey hint
-        let hint = NSMenuItem(title: "Right Option: toggle recording", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        menu.addItem(hint)
-
-        menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit SuperVibe", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -100,10 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if AXIsProcessTrusted() {
             log("[SuperVibe] Accessibility OK")
         } else {
-            log("[SuperVibe] WARNING: Accessibility not granted – global hotkey may not work")
+            log("[SuperVibe] WARNING: Accessibility not granted")
             log("[SuperVibe] Grant in: System Settings -> Privacy & Security -> Accessibility")
         }
-        // Always start hotkeys – global monitor silently no-ops without permission
         appState.setupHotkeys()
     }
 
@@ -113,9 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.toggleRecording()
     }
 
-    @objc private func togglePolish() {
-        appState.postprocessEnabled.toggle()
-        log("[SuperVibe] Polishing: \(appState.postprocessEnabled)")
+    @objc private func cancelRecord() {
+        appState.cancelSession()
         rebuildMenu()
     }
 

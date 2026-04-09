@@ -23,15 +23,19 @@ final class AppState {
     private let audioRecorder = AudioRecorder()
     private let hotkeyManager = HotkeyManager()
     private var overlayPanel: OverlayPanel?
+    private let overlayVM = OverlayViewModel()
     private var pipelineTask: Task<Void, Never>?
     private var asrAccum = ""
     private var gptAccum = ""
 
-    // MARK: - Hotkeys (called after accessibility permission granted)
+    // MARK: - Hotkeys
 
     func setupHotkeys() {
         hotkeyManager.onToggleRecord = { [weak self] in
             DispatchQueue.main.async { self?.toggleRecording() }
+        }
+        hotkeyManager.onCancel = { [weak self] in
+            DispatchQueue.main.async { self?.cancelSession() }
         }
         hotkeyManager.start()
     }
@@ -57,12 +61,19 @@ final class AppState {
         isRecording = true
         statusText = "Recording..."
         onRecordingChanged?(true)
-        log("[AppState] Recording started – postprocess=\(postprocessEnabled) translation=\(translationLanguage ?? "off")")
+        log("[AppState] Recording started – translation=\(translationLanguage ?? "off")")
 
+        setOverlayStage(.recording)
         showOverlay()
+        overlayVM.startSmoothing()
 
+        // Audio chunk forwarding
         audioRecorder.onAudioChunk = { [weak self] chunk in
             self?.pipelineClient?.sendAudioChunk(chunk)
+        }
+        // Audio level for waveform
+        audioRecorder.onAudioLevel = { [weak self] level in
+            self?.overlayVM.pushLevel(level)
         }
 
         do {
@@ -71,12 +82,40 @@ final class AppState {
             stage = .error; isRecording = false
             statusText = "Mic error: \(error.localizedDescription)"
             onRecordingChanged?(false)
+            setOverlayStage(.error)
             log("[AppState] Mic error: \(error)")
-            updateOverlay()
             return
         }
 
         pipelineTask = Task { [weak self] in await self?.runPipeline() }
+    }
+
+    // MARK: - Cancel (ESC)
+
+    func cancelSession() {
+        guard stage != .idle else { return }
+        log("[AppState] Session cancelled (ESC)")
+        // Reset stage FIRST so async callbacks are ignored
+        stage = .idle
+        statusText = "Ready"
+        if isRecording {
+            isRecording = false
+            onRecordingChanged?(false)
+            overlayVM.stopSmoothing()
+            audioRecorder.stop()
+        }
+        // Clear callbacks before closing so no late error fires
+        pipelineClient?.onError = nil
+        pipelineClient?.onDone = nil
+        pipelineClient?.onASRDelta = nil
+        pipelineClient?.onASRDone = nil
+        pipelineClient?.onGPTDelta = nil
+        pipelineClient?.onGPTDone = nil
+        pipelineClient?.close()
+        pipelineClient = nil
+        pipelineTask?.cancel()
+        pipelineTask = nil
+        hideOverlay()
     }
 
     // MARK: - Stop
@@ -85,6 +124,7 @@ final class AppState {
         guard isRecording else { return }
         isRecording = false
         onRecordingChanged?(false)
+        overlayVM.stopSmoothing()
         audioRecorder.stop()
         pipelineClient?.stopSession()
         log("[AppState] Recording stopped, sending stop to pipeline")
@@ -92,7 +132,7 @@ final class AppState {
         if stage == .recording {
             stage = .recognizing
             statusText = "Transcribing..."
-            updateOverlay()
+            setOverlayStage(.recognizing)
         }
     }
 
@@ -131,7 +171,7 @@ final class AppState {
             DispatchQueue.main.async {
                 self.stage = .error
                 self.statusText = "Pipeline error: \(error.localizedDescription)"
-                self.updateOverlay()
+                self.setOverlayStage(.error)
             }
         }
 
@@ -148,18 +188,25 @@ final class AppState {
                 self.asrText = self.asrAccum
                 if self.stage == .recording || self.stage == .recognizing {
                     self.stage = .recognizing
+                    self.setOverlayStage(.recognizing, asr: self.asrText)
                 }
-                self.updateOverlay()
             }
         }
         client.onASRDone = { [weak self] text, elapsed in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.asrText = text
-                self.stage = self.postprocessEnabled ? .polishing : .done
-                self.statusText = self.postprocessEnabled ? "Polishing..." : "Done"
-                self.updateOverlay()
                 log("[ASR] \(String(format: "%.1f", elapsed))s – \(text.prefix(80))")
+
+                if self.translationLanguage != nil {
+                    self.stage = .translating
+                    self.statusText = "Translating..."
+                    self.setOverlayStage(.translating)
+                } else {
+                    // No translation — ASR is the final result
+                    self.stage = .done
+                    self.statusText = "Done"
+                }
             }
         }
         client.onGPTDelta = { [weak self] text in
@@ -167,14 +214,14 @@ final class AppState {
                 guard let self else { return }
                 self.gptAccum += text
                 self.gptText = self.gptAccum
-                self.updateOverlay()
+                self.setOverlayStage(self.stage, asr: self.asrText, gpt: self.gptText)
             }
         }
         client.onGPTDone = { [weak self] text, elapsed in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.gptText = text
-                self.updateOverlay()
+                self.setOverlayStage(self.stage, asr: self.asrText, gpt: self.gptText)
                 log("[GPT] \(String(format: "%.1f", elapsed))s – \(text.prefix(80))")
             }
         }
@@ -183,7 +230,7 @@ final class AppState {
                 log("[Pipeline] onError: \(error)")
                 self?.stage = .error
                 self?.statusText = "Error: \(error)"
-                self?.updateOverlay()
+                self?.setOverlayStage(.error)
             }
         }
         client.onDone = { [weak self] elapsed in
@@ -196,11 +243,25 @@ final class AppState {
 
     // MARK: - Finish
 
+    /// Strip trailing period/。 for short single-sentence results.
+    private func trimTrailingPunctuation(_ text: String) -> String {
+        var s = text
+        // Only strip if it looks like a single sentence (no mid-sentence punctuation)
+        let midPunct: [Character] = [".", "。", "!", "！", "?", "？"]
+        let body = s.dropLast()
+        let hasMidPunct = body.contains(where: { midPunct.contains($0) })
+        if !hasMidPunct, let last = s.last, last == "." || last == "。" {
+            s.removeLast()
+        }
+        return s
+    }
+
     private func finishSession() {
         stage = .done
-        let finalText = gptText.isEmpty ? asrText : gptText
+        let raw = gptText.isEmpty ? asrText : gptText
+        let finalText = trimTrailingPunctuation(raw)
         statusText = "Done"
-        updateOverlay()
+        setOverlayStage(.done, asr: asrText, gpt: gptText)
         log("[AppState] Finish – text=\"\(finalText.prefix(80))\"")
 
         guard !finalText.isEmpty else {
@@ -214,19 +275,6 @@ final class AppState {
         scheduleReset(delay: 1.5)
     }
 
-    private static func languageName(_ code: String) -> String {
-        switch code {
-        case "en": return "English"
-        case "zh": return "Chinese"
-        case "ja": return "Japanese"
-        case "ko": return "Korean"
-        case "fr": return "French"
-        case "es": return "Spanish"
-        case "de": return "German"
-        default:   return code
-        }
-    }
-
     private func scheduleReset(delay: Double) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.hideOverlay()
@@ -237,22 +285,31 @@ final class AppState {
 
     // MARK: - Overlay
 
+    private func setOverlayStage(
+        _ stage: PipelineStage,
+        asr: String = "",
+        gpt: String = ""
+    ) {
+        overlayVM.stage = stage
+        overlayVM.asrText = asr
+        overlayVM.gptText = gpt
+        overlayVM.isTranslation = translationLanguage != nil
+    }
+
     private func showOverlay() {
-        if overlayPanel == nil { overlayPanel = OverlayPanel() }
-        updateOverlay()
+        if overlayPanel == nil {
+            overlayVM.onCancel = { [weak self] in self?.cancelSession() }
+            overlayVM.onConfirm = { [weak self] in self?.stopRecording() }
+            overlayPanel = OverlayPanel()
+            overlayPanel?.contentView = NSHostingView(
+                rootView: OverlayRootView(vm: overlayVM)
+            )
+        }
         overlayPanel?.positionCenter()
         overlayPanel?.orderFront(nil)
     }
 
-    private func updateOverlay() {
-        overlayPanel?.contentView = NSHostingView(rootView: OverlayContentView(
-            stage: stage, asrText: asrText, gptText: gptText,
-            isTranslation: translationLanguage != nil
-        ))
-    }
-
     private func hideOverlay() {
         overlayPanel?.orderOut(nil)
-        overlayPanel?.contentView = nil
     }
 }

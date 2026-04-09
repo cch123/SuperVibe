@@ -4,6 +4,7 @@ import Foundation
 final class AudioRecorder {
 
     var onAudioChunk: ((Data) -> Void)?
+    var onAudioLevel: ((Float) -> Void)?
 
     private var audioEngine: AVAudioEngine?
     private let dataLock = NSLock()
@@ -93,6 +94,21 @@ final class AudioRecorder {
                 ptr[i] = Int16(clamped * 32767.0)
             }
         }
+
+        // Compute RMS audio level for visualization
+        var sum: Float = 0
+        for ch in 0..<inputChannels {
+            for i in 0..<inputFrames {
+                let s = floatData[ch][i]
+                sum += s * s
+            }
+        }
+        let rms = sqrt(sum / Float(inputFrames * inputChannels))
+        // dB scale for perceptual loudness mapping
+        let db = 20 * log10(max(rms, 1e-7))
+        let normalized = (db + 50) / 50  // -50dB..0dB -> 0..1
+        let level = max(0, min(1, normalized))
+        onAudioLevel?(level)
 
         dataLock.lock()
         accumulatedPCM.append(pcmData)

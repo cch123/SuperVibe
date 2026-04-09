@@ -2,49 +2,68 @@ import Cocoa
 
 final class HotkeyManager {
 
-    /// Right Option pressed (toggle).
     var onToggleRecord: (() -> Void)?
+    var onCancel: (() -> Void)?
 
-    private var globalMonitor: Any?
-    private var localMonitor: Any?
+    private var globalFlagsMonitor: Any?
+    private var localFlagsMonitor: Any?
+    private var globalKeyMonitor: Any?
+    private var localKeyMonitor: Any?
     private var isKeyDown = false
 
     func start() {
-        // Check accessibility permission (no prompt – just log)
         if AXIsProcessTrusted() {
             log("[Hotkey] Accessibility permission OK")
         } else {
             log("[Hotkey] WARNING: Accessibility not granted. Global hotkey won't work.")
-            log("[Hotkey] Grant permission in: System Settings → Privacy & Security → Accessibility")
+            log("[Hotkey] Grant in: System Settings -> Privacy & Security -> Accessibility")
         }
 
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
+        globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
             self?.handleFlags(e)
         }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
             self?.handleFlags(e)
             return e
         }
-        log("[Hotkey] Listening for Right Option")
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            self?.handleKey(e)
+        }
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            self?.handleKey(e)
+            return e
+        }
+        log("[Hotkey] Listening (Right Option = record, ESC = cancel)")
     }
 
     func stop() {
-        [globalMonitor, localMonitor].compactMap { $0 }.forEach { NSEvent.removeMonitor($0) }
-        globalMonitor = nil
-        localMonitor = nil
+        [globalFlagsMonitor, localFlagsMonitor, globalKeyMonitor, localKeyMonitor]
+            .compactMap { $0 }
+            .forEach { NSEvent.removeMonitor($0) }
+        globalFlagsMonitor = nil
+        localFlagsMonitor = nil
+        globalKeyMonitor = nil
+        localKeyMonitor = nil
     }
 
     deinit { stop() }
 
     private func handleFlags(_ event: NSEvent) {
-        guard event.keyCode == 61 else { return } // Right Option
+        guard event.keyCode == 61 else { return }
         let optionDown = event.modifierFlags.contains(.option)
         if optionDown && !isKeyDown {
             isKeyDown = true
-            log("[Hotkey] Right Option DOWN → toggle")
+            log("[Hotkey] Right Option DOWN -> toggle")
             onToggleRecord?()
         } else if !optionDown {
             isKeyDown = false
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) {
+        if event.keyCode == 53 { // ESC
+            log("[Hotkey] ESC -> cancel")
+            onCancel?()
         }
     }
 }
