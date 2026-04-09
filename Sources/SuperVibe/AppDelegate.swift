@@ -48,9 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cancel.target = self
             menu.addItem(cancel)
         } else {
-            let start = NSMenuItem(title: "Start Recording", action: #selector(toggleRecord), keyEquivalent: "")
-            start.target = self
-            menu.addItem(start)
+            menu.addItem(shortcutMenuItem("Transcribe", shortcut: "Right ⌥", action: #selector(toggleRecord)))
+            let translateItem = shortcutMenuItem("Translate", shortcut: "Right ⌥ /", action: #selector(toggleTranslateRecord))
+            if appState.translationLanguage == nil {
+                translateItem.isEnabled = false
+            }
+            menu.addItem(translateItem)
         }
 
         menu.addItem(.separator())
@@ -104,8 +107,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
+    private func shortcutMenuItem(_ title: String, shortcut: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+
+        let pStyle = NSMutableParagraphStyle()
+        pStyle.tabStops = [NSTextTab(textAlignment: .right, location: 180)]
+
+        let str = NSMutableAttributedString(string: "\(title)\t\(shortcut)", attributes: [
+            .font: NSFont.menuFont(ofSize: 14),
+            .paragraphStyle: pStyle,
+        ])
+        str.addAttribute(
+            .foregroundColor, value: NSColor.secondaryLabelColor,
+            range: NSRange(location: title.count + 1, length: shortcut.count)
+        )
+        item.attributedTitle = str
+        return item
+    }
+
     @objc private func toggleRecord() {
         appState.toggleRecording()
+    }
+
+    @objc private func toggleTranslateRecord() {
+        appState.toggleTranslateRecording()
     }
 
     @objc private func cancelRecord() {

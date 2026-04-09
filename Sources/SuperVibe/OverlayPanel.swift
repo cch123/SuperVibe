@@ -14,7 +14,7 @@ private let bgDark      = Color(red: 0.04, green: 0.04, blue: 0.08)
 final class OverlayPanel: NSPanel {
     convenience init() {
         self.init(
-            contentRect: NSRect(x: 0, y: 0, width: 700, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 520),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -33,7 +33,7 @@ final class OverlayPanel: NSPanel {
         let area = screen.visibleFrame
         // Panel covers a big region, always centered; SwiftUI content centers itself inside
         let w: CGFloat = 700
-        let h: CGFloat = 400
+        let h: CGFloat = 520
         let x = area.midX - w / 2
         let y = area.midY - h / 2
         setFrame(NSRect(x: x, y: y, width: w, height: h), display: true)
@@ -98,15 +98,19 @@ struct OverlayRootView: View {
                     onConfirm: vm.onConfirm
                 )
             case .recognizing:
-                CyberTextCard(
-                    accent: vm.isTranslation ? neonMagenta : neonCyan,
-                    label: vm.isTranslation ? "TRANSCRIBING..." : "TRANSCRIBING",
-                    text: vm.asrText
-                )
+                if vm.isTranslation {
+                    CyberTranslatingCard(asrText: vm.asrText, gptText: vm.gptText, isTranscribing: true)
+                } else {
+                    CyberTextCard(accent: neonCyan, label: "TRANSCRIBING", text: vm.asrText)
+                }
             case .translating:
-                CyberTextCard(accent: neonMagenta, label: "TRANSLATING", text: vm.gptText)
+                CyberTranslatingCard(asrText: vm.asrText, gptText: vm.gptText, isTranscribing: false)
             case .done:
-                CyberDoneCard(text: vm.gptText.isEmpty ? vm.asrText : vm.gptText)
+                if vm.isTranslation && !vm.gptText.isEmpty {
+                    CyberTranslatingCard(asrText: vm.asrText, gptText: vm.gptText, isTranscribing: false)
+                } else {
+                    CyberDoneCard(text: vm.gptText.isEmpty ? vm.asrText : vm.gptText)
+                }
             case .error:
                 CyberInfoCard(label: "ERROR", accent: Color(red: 1, green: 0.2, blue: 0.2))
             default:
@@ -150,9 +154,7 @@ struct CyberCard<Content: View>: View {
                             lineWidth: 1.5
                         )
 
-                    // Corner brackets
-                    CornerBrackets(color: accent)
-                        .padding(4)
+
                 }
                 .shadow(color: accent.opacity(0.3), radius: 20, y: 0)
             }
@@ -172,36 +174,6 @@ struct ScanLines: View {
                 ctx.fill(Path(rect), with: .color(.white.opacity(0.015)))
             }
         }
-    }
-}
-
-struct CornerBrackets: View {
-    let color: Color
-    private let len: CGFloat = 14
-    private let thick: CGFloat = 1.5
-
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width, h = geo.size.height
-            // Top-left
-            bracket(at: CGPoint(x: 0, y: 0), dx: 1, dy: 1)
-            // Top-right
-            bracket(at: CGPoint(x: w, y: 0), dx: -1, dy: 1)
-            // Bottom-left
-            bracket(at: CGPoint(x: 0, y: h), dx: 1, dy: -1)
-            // Bottom-right
-            bracket(at: CGPoint(x: w, y: h), dx: -1, dy: -1)
-        }
-    }
-
-    @ViewBuilder
-    func bracket(at origin: CGPoint, dx: CGFloat, dy: CGFloat) -> some View {
-        Path { p in
-            p.move(to: CGPoint(x: origin.x + dx * len, y: origin.y))
-            p.addLine(to: origin)
-            p.addLine(to: CGPoint(x: origin.x, y: origin.y + dy * len))
-        }
-        .stroke(color.opacity(0.6), lineWidth: thick)
     }
 }
 
@@ -278,7 +250,7 @@ struct RecordingHUD: View {
                 ScanLines().clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(accent.opacity(0.3), lineWidth: 1)
-                CornerBrackets(color: accent).padding(5)
+                // (corner brackets removed)
             }
             .shadow(color: accent.opacity(0.15), radius: 16)
         }
@@ -401,6 +373,122 @@ struct CyberShimmer: View {
                     phase = 1.5
                 }
             }
+    }
+}
+
+// MARK: - Translating Card (ASR + GPT)
+
+struct CyberTranslatingCard: View {
+    let asrText: String
+    let gptText: String
+    var isTranscribing: Bool = false
+    @State private var dotPhase = 0
+    @State private var timer: Timer?
+
+    private var tailASR: String {
+        if asrText.count <= 200 { return asrText }
+        return "…" + asrText.suffix(200)
+    }
+    private var tailGPT: String {
+        if gptText.count <= 400 { return gptText }
+        return "…" + gptText.suffix(400)
+    }
+
+    var body: some View {
+        CyberCard(accent: neonMagenta) {
+            VStack(alignment: .leading, spacing: 14) {
+                // ASR original text
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        if isTranscribing {
+                            SpinArc(color: neonCyan)
+                                .frame(width: 14, height: 14)
+                            Text("TRANSCRIBING")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(neonCyan)
+                                .shadow(color: neonCyan.opacity(0.6), radius: 3)
+                            HStack(spacing: 3) {
+                                ForEach(0..<3, id: \.self) { i in
+                                    Circle()
+                                        .fill(neonCyan.opacity(i < dotPhase ? 0.9 : 0.15))
+                                        .frame(width: 4, height: 4)
+                                        .animation(.easeInOut(duration: 0.15), value: dotPhase)
+                                }
+                            }
+                        } else {
+                            Text("ORIGINAL")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(neonCyan.opacity(0.7))
+                        }
+                    }
+
+                    if asrText.isEmpty {
+                        CyberShimmer(color: neonCyan)
+                    } else {
+                        Text(tailASR)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.white.opacity(isTranscribing ? 0.9 : 0.5))
+                            .lineSpacing(3)
+                            .lineLimit(isTranscribing ? 6 : 3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                // Divider
+                Rectangle()
+                    .fill(neonMagenta.opacity(0.2))
+                    .frame(height: 1)
+
+                // Translation
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        if !isTranscribing {
+                            SpinArc(color: neonMagenta)
+                                .frame(width: 14, height: 14)
+                        }
+                        Text("TRANSLATION")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(neonMagenta.opacity(isTranscribing ? 0.3 : 1))
+                            .shadow(color: neonMagenta.opacity(isTranscribing ? 0 : 0.6), radius: 3)
+                        if !isTranscribing {
+                            HStack(spacing: 3) {
+                                ForEach(0..<3, id: \.self) { i in
+                                    Circle()
+                                        .fill(neonMagenta.opacity(i < dotPhase ? 0.9 : 0.15))
+                                        .frame(width: 4, height: 4)
+                                        .shadow(color: neonMagenta.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
+                                        .animation(.easeInOut(duration: 0.15), value: dotPhase)
+                                }
+                            }
+                        }
+                    }
+
+                    if isTranscribing {
+                        Text("Waiting for transcription...")
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.2))
+                    } else if gptText.isEmpty {
+                        CyberShimmer(color: neonMagenta)
+                    } else {
+                        Text(tailGPT)
+                            .font(.system(size: 14, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .shadow(color: neonMagenta.opacity(0.15), radius: 2)
+                            .lineSpacing(4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .onAppear { startDots() }
+        .onDisappear { timer?.invalidate(); timer = nil }
+    }
+
+    private func startDots() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { _ in
+            DispatchQueue.main.async { dotPhase = (dotPhase + 1) % 4 }
+        }
     }
 }
 

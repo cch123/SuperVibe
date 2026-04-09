@@ -1,7 +1,7 @@
 import Cocoa
 import SwiftUI
 
-final class AppState {
+final class AppState: @unchecked Sendable {
 
     // MARK: - State
 
@@ -11,7 +11,9 @@ final class AppState {
     var asrText = ""
     var gptText = ""
     var postprocessEnabled = true
-    var translationLanguage: String? = nil
+    var translationLanguage: String? = AppState.loadSavedLanguage() {
+        didSet { saveLanguage() }
+    }
     private var sessionTranslate = false
 
     /// Called when isRecording changes (for menu bar icon update).
@@ -79,8 +81,10 @@ final class AppState {
         onRecordingChanged?(true)
         log("[AppState] Recording started – mode=\(translate ? "translate(\(translationLanguage ?? "?"))" : "transcribe")")
 
+        overlayVM.asrText = ""
+        overlayVM.gptText = ""
         overlayVM.isTranslation = sessionTranslate
-        setOverlayStage(.recording)
+        overlayVM.stage = .recording
         showOverlay()
         overlayVM.startSmoothing()
 
@@ -218,7 +222,7 @@ final class AppState {
                 if self.sessionTranslate && self.translationLanguage != nil {
                     self.stage = .translating
                     self.statusText = "Translating..."
-                    self.setOverlayStage(.translating)
+                    self.setOverlayStage(.translating, asr: self.asrText)
                 } else {
                     // No translation — ASR is the final result
                     self.stage = .done
@@ -328,5 +332,42 @@ final class AppState {
 
     private func hideOverlay() {
         overlayPanel?.orderOut(nil)
+        overlayVM.stage = .idle
+        overlayVM.asrText = ""
+        overlayVM.gptText = ""
+    }
+
+    // MARK: - Persistence
+
+    private static let configDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".SuperVibe")
+    private static let configFile = configDir.appendingPathComponent("config.json")
+
+    static func loadSavedLanguage() -> String? {
+        guard let data = try? Data(contentsOf: configFile),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return json["translation_language"] as? String
+    }
+
+    private func saveLanguage() {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: Self.configDir, withIntermediateDirectories: true)
+
+        var config: [String: Any] = [:]
+        if let data = try? Data(contentsOf: Self.configFile),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            config = existing
+        }
+
+        if let lang = translationLanguage {
+            config["translation_language"] = lang
+        } else {
+            config.removeValue(forKey: "translation_language")
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: Self.configFile)
+        }
     }
 }
