@@ -3,6 +3,7 @@ import Cocoa
 final class HotkeyManager {
 
     var onToggleRecord: (() -> Void)?
+    var onToggleTranslate: (() -> Void)?
     var onCancel: (() -> Void)?
 
     private var globalFlagsMonitor: Any?
@@ -10,6 +11,7 @@ final class HotkeyManager {
     private var globalKeyMonitor: Any?
     private var localKeyMonitor: Any?
     private var isKeyDown = false
+    private var slashHandled = false
 
     func start() {
         if AXIsProcessTrusted() {
@@ -33,7 +35,7 @@ final class HotkeyManager {
             self?.handleKey(e)
             return e
         }
-        log("[Hotkey] Listening (Right Option = record, ESC = cancel)")
+        log("[Hotkey] Listening (Right Option = transcribe, Right Option+/ = translate, ESC = cancel)")
     }
 
     func stop() {
@@ -49,14 +51,18 @@ final class HotkeyManager {
     deinit { stop() }
 
     private func handleFlags(_ event: NSEvent) {
-        guard event.keyCode == 61 else { return }
+        guard event.keyCode == 61 else { return } // Right Option
         let optionDown = event.modifierFlags.contains(.option)
         if optionDown && !isKeyDown {
             isKeyDown = true
-            log("[Hotkey] Right Option DOWN -> toggle")
-            onToggleRecord?()
-        } else if !optionDown {
+            slashHandled = false
+        } else if !optionDown && isKeyDown {
             isKeyDown = false
+            if !slashHandled {
+                log("[Hotkey] Right Option UP -> toggle record")
+                onToggleRecord?()
+            }
+            slashHandled = false
         }
     }
 
@@ -64,6 +70,10 @@ final class HotkeyManager {
         if event.keyCode == 53 { // ESC
             log("[Hotkey] ESC -> cancel")
             onCancel?()
+        } else if event.keyCode == 44 && isKeyDown && !slashHandled { // / while Right Option held
+            slashHandled = true
+            log("[Hotkey] Right Option + / -> toggle translate")
+            onToggleTranslate?()
         }
     }
 }

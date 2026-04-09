@@ -12,6 +12,7 @@ final class AppState {
     var gptText = ""
     var postprocessEnabled = true
     var translationLanguage: String? = nil
+    private var sessionTranslate = false
 
     /// Called when isRecording changes (for menu bar icon update).
     var onRecordingChanged: ((Bool) -> Void)?
@@ -34,6 +35,9 @@ final class AppState {
         hotkeyManager.onToggleRecord = { [weak self] in
             DispatchQueue.main.async { self?.toggleRecording() }
         }
+        hotkeyManager.onToggleTranslate = { [weak self] in
+            DispatchQueue.main.async { self?.toggleTranslateRecording() }
+        }
         hotkeyManager.onCancel = { [weak self] in
             DispatchQueue.main.async { self?.cancelSession() }
         }
@@ -44,25 +48,38 @@ final class AppState {
 
     func toggleRecording() {
         log("[AppState] toggleRecording – isRecording=\(isRecording)")
-        if isRecording { stopRecording() } else { startRecording() }
+        if isRecording { stopRecording() } else { startRecording(translate: false) }
+    }
+
+    func toggleTranslateRecording() {
+        log("[AppState] toggleTranslateRecording – isRecording=\(isRecording)")
+        if isRecording {
+            stopRecording()
+        } else if translationLanguage != nil {
+            startRecording(translate: true)
+        } else {
+            log("[AppState] No translation language set, ignoring translate toggle")
+        }
     }
 
     // MARK: - Start
 
-    func startRecording() {
+    func startRecording(translate: Bool) {
         guard stage == .idle else {
             log("[AppState] startRecording skipped, stage=\(stage)")
             return
         }
 
+        sessionTranslate = translate
         asrText = ""; gptText = ""
         asrAccum = ""; gptAccum = ""
         stage = .recording
         isRecording = true
         statusText = "Recording..."
         onRecordingChanged?(true)
-        log("[AppState] Recording started – translation=\(translationLanguage ?? "off")")
+        log("[AppState] Recording started – mode=\(translate ? "translate(\(translationLanguage ?? "?"))" : "transcribe")")
 
+        overlayVM.isTranslation = sessionTranslate
         setOverlayStage(.recording)
         showOverlay()
         overlayVM.startSmoothing()
@@ -155,7 +172,7 @@ final class AppState {
                 "channels": 1,
                 "platform": "macOS",
             ]
-            if let lang = translationLanguage {
+            if sessionTranslate, let lang = translationLanguage {
                 innerConfig["target_language"] = lang
             }
             let cfg: [String: Any] = [
@@ -198,7 +215,7 @@ final class AppState {
                 self.asrText = text
                 log("[ASR] \(String(format: "%.1f", elapsed))s – \(text.prefix(80))")
 
-                if self.translationLanguage != nil {
+                if self.sessionTranslate && self.translationLanguage != nil {
                     self.stage = .translating
                     self.statusText = "Translating..."
                     self.setOverlayStage(.translating)
@@ -293,7 +310,7 @@ final class AppState {
         overlayVM.stage = stage
         overlayVM.asrText = asr
         overlayVM.gptText = gpt
-        overlayVM.isTranslation = translationLanguage != nil
+        overlayVM.isTranslation = sessionTranslate
     }
 
     private func showOverlay() {

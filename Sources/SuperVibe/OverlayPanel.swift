@@ -93,11 +93,16 @@ struct OverlayRootView: View {
             case .recording:
                 RecordingHUD(
                     level: vm.smoothedLevel,
+                    accent: vm.isTranslation ? neonMagenta : neonCyan,
                     onCancel: vm.onCancel,
                     onConfirm: vm.onConfirm
                 )
             case .recognizing:
-                CyberTextCard(accent: neonCyan, label: "TRANSCRIBING", text: vm.asrText)
+                CyberTextCard(
+                    accent: vm.isTranslation ? neonMagenta : neonCyan,
+                    label: vm.isTranslation ? "TRANSCRIBING..." : "TRANSCRIBING",
+                    text: vm.asrText
+                )
             case .translating:
                 CyberTextCard(accent: neonMagenta, label: "TRANSLATING", text: vm.gptText)
             case .done:
@@ -204,6 +209,7 @@ struct CornerBrackets: View {
 
 struct RecordingHUD: View {
     let level: CGFloat
+    var accent: Color = neonCyan
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
 
@@ -226,10 +232,10 @@ struct RecordingHUD: View {
             Button(action: { onCancel?() }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(neonCyan.opacity(0.6))
+                    .foregroundStyle(accent.opacity(0.6))
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(neonCyan.opacity(0.08)))
-                    .overlay(Circle().stroke(neonCyan.opacity(0.2), lineWidth: 0.5))
+                    .background(Circle().fill(accent.opacity(0.08)))
+                    .overlay(Circle().stroke(accent.opacity(0.2), lineWidth: 0.5))
             }
             .buttonStyle(.plain)
 
@@ -240,8 +246,8 @@ struct RecordingHUD: View {
                     ForEach(0..<count, id: \.self) { i in
                         let h = barH(i, t)
                         RoundedRectangle(cornerRadius: barWidth / 2)
-                            .fill(neonCyan)
-                            .shadow(color: neonCyan.opacity(0.5), radius: 3)
+                            .fill(accent)
+                            .shadow(color: accent.opacity(0.5), radius: 3)
                             .frame(width: barWidth, height: h)
                             .animation(
                                 .interpolatingSpring(stiffness: 180, damping: 8),
@@ -271,10 +277,10 @@ struct RecordingHUD: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous).fill(bgDark)
                 ScanLines().clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(neonCyan.opacity(0.3), lineWidth: 1)
-                CornerBrackets(color: neonCyan).padding(5)
+                    .stroke(accent.opacity(0.3), lineWidth: 1)
+                CornerBrackets(color: accent).padding(5)
             }
-            .shadow(color: neonCyan.opacity(0.15), radius: 16)
+            .shadow(color: accent.opacity(0.15), radius: 16)
         }
     }
 
