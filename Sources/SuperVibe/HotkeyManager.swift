@@ -8,8 +8,8 @@ final class HotkeyManager {
 
     private var globalFlagsMonitor: Any?
     private var localFlagsMonitor: Any?
-    private var globalKeyMonitor: Any?
-    private var localKeyMonitor: Any?
+    fileprivate var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
     private var isKeyDown = false
     private var slashHandled = false
 
@@ -28,24 +28,44 @@ final class HotkeyManager {
             self?.handleFlags(e)
             return e
         }
-        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            self?.handleKey(e)
+
+        // Use CGEventTap to intercept key events globally, so we can suppress
+        // the ÷ character that macOS produces for Option+/
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: hotkeyEventTapCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            log("[Hotkey] Failed to create CGEventTap – falling back to passive monitors")
+            return
         }
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            self?.handleKey(e)
-            return e
-        }
+        eventTap = tap
+        runLoopSource = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
         log("[Hotkey] Listening (Right Option = transcribe, Right Option+/ = translate, ESC = cancel)")
     }
 
     func stop() {
-        [globalFlagsMonitor, localFlagsMonitor, globalKeyMonitor, localKeyMonitor]
+        [globalFlagsMonitor, localFlagsMonitor]
             .compactMap { $0 }
             .forEach { NSEvent.removeMonitor($0) }
         globalFlagsMonitor = nil
         localFlagsMonitor = nil
-        globalKeyMonitor = nil
-        localKeyMonitor = nil
+
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            eventTap = nil
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+            runLoopSource = nil
+        }
     }
 
     deinit { stop() }
@@ -66,14 +86,49 @@ final class HotkeyManager {
         }
     }
 
-    private func handleKey(_ event: NSEvent) {
-        if event.keyCode == 53 { // ESC
+    /// Called from the CGEventTap callback. Returns `true` if the event
+    /// should be suppressed (consumed).
+    fileprivate func handleKeyTap(_ keyCode: Int64) -> Bool {
+        if keyCode == 53 { // ESC
             log("[Hotkey] ESC -> cancel")
-            onCancel?()
-        } else if event.keyCode == 44 && isKeyDown && !slashHandled { // / while Right Option held
+            DispatchQueue.main.async { [weak self] in self?.onCancel?() }
+            return false // let ESC propagate normally
+        } else if keyCode == 44 && isKeyDown && !slashHandled { // / while Right Option held
             slashHandled = true
             log("[Hotkey] Right Option + / -> toggle translate")
-            onToggleTranslate?()
+            DispatchQueue.main.async { [weak self] in self?.onToggleTranslate?() }
+            return true // suppress the ÷ character
         }
+        return false
     }
+}
+
+/// Top-level C-compatible callback for the CGEventTap.
+private func hotkeyEventTapCallback(
+    proxy: CGEventTapProxy,
+    type: CGEventType,
+    event: CGEvent,
+    userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    // If the tap is disabled by the system, re-enable it.
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        if let userInfo = userInfo {
+            let manager = Unmanaged<HotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+            if let tap = manager.eventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+        }
+        return Unmanaged.passUnretained(event)
+    }
+
+    guard let userInfo = userInfo else {
+        return Unmanaged.passUnretained(event)
+    }
+    let manager = Unmanaged<HotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+    if manager.handleKeyTap(keyCode) {
+        return nil // suppress the event
+    }
+    return Unmanaged.passUnretained(event)
 }
