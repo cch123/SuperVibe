@@ -95,12 +95,15 @@ final class LLMService {
 
     static func looksLikeRefusal(_ response: String) -> Bool {
         let refusalMarkers = [
-            // English
+            // English — refusal / hedging / meta-commentary
             "I can't", "I cannot", "I'm not able to", "I am not able to",
             "I'm unable to", "I appreciate", "I need to clarify",
             "I don't feel comfortable", "I must decline",
             "not able to polish", "not able to translate",
             "unable to process", "against my guidelines",
+            "I notice", "Could you please provide",
+            "incomplete", "no complete sentence",
+            "intended meaning", "provide the complete",
             // Japanese
             "すみません", "申し訳", "できません", "対応できません",
             "お手伝いできません", "適切ではない",
