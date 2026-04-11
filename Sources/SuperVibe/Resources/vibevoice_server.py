@@ -34,6 +34,7 @@ def main():
                 model=model,
                 audio=audio_path,
                 prefill_step_size=4096,
+                output_path="/dev/null",
             )
             # result is an STTOutput object with .segments list
             if hasattr(result, 'segments') and result.segments:
