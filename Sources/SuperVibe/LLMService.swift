@@ -71,7 +71,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Rewrite the following text in the same language, replacing any profanity, vulgar, or sexually explicit language with polite, emotionally equivalent alternatives. Preserve the speaker's emotion and intent, just use less offensive wording. Output ONLY the rewritten text, nothing else.\n\n\(text)"
+        let prompt = "Minimally edit the following text in the same language: ONLY replace the explicit/vulgar/sexual words themselves with milder substitutes. Keep the sentence structure, tone, emotion, and aggression level completely unchanged. Do NOT rewrite the whole sentence or soften the attitude — just swap out the worst words. Output ONLY the edited text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
