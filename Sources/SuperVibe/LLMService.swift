@@ -147,18 +147,19 @@ final class LLMService {
             throw LLMError.parseFailed
         }
 
-        // Take only the first paragraph — strip alternatives/commentary
-        let trimmed = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: "\n\n").first?
-            .components(separatedBy: "\n(").first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let full = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Detect LLM refusal — check if the response is meta-commentary
-        // rather than actual processed text
-        if LLMService.looksLikeRefusal(trimmed) {
-            log("[LLM] Refusal detected, falling back to original text. Raw response:\n\(trimmed)")
+        // Detect LLM refusal on full response
+        if LLMService.looksLikeRefusal(full) {
+            log("[LLM] Refusal detected, falling back to original text. Raw response:\n\(full)")
             return originalText
         }
+
+        // Take only the first paragraph — strip alternatives/commentary
+        let trimmed = full
+            .components(separatedBy: "\n\n").first?
+            .components(separatedBy: "\n(").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? full
 
         return trimmed
     }
