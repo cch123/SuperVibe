@@ -74,7 +74,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Minimally edit the following text in the same language. Replace any sexually explicit content with non-sexual expressions that preserve the aggressive tone. The result must contain NO sexual references. Keep the sentence structure and emotion. For example: '操你妈'→'收拾你', '插你'→'揍你', '操你妈的逼'→'收拾你妈'. Output ONLY the edited text, nothing else.\n\n\(text)"
+        let prompt = "Minimally edit the following text in the same language. Replace sexually explicit words with suggestive but implicit expressions — sexual innuendo instead of explicit language. Keep the sentence structure, tone, and sexual intent, just make it indirect. For example: '操你'→'上你', '插入'→'睡', '逼'→'那里'. Output ONLY the edited text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
