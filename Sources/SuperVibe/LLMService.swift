@@ -28,9 +28,9 @@ final class LLMService {
         let langName = languageName(for: targetLanguage)
         let prompt: String
         if polish {
-            prompt = "This is transcribed speech. Translate it to \(langName). Since this is spoken language, understand the speaker's true intent — handle self-corrections (e.g. \"no wait, I mean...\"), filler words, and false starts by only translating the final intended meaning. Fix grammar and punctuation in the translation. Output ONLY the translation, nothing else.\n\n\(text)"
+            prompt = "This is transcribed speech. Translate it to \(langName). Since this is spoken language, understand the speaker's true intent — handle self-corrections (e.g. \"no wait, I mean...\"), filler words, and false starts by only translating the final intended meaning. Fix grammar and punctuation. If the speech contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the speaker's emotion and intent, just use less offensive wording. Output ONLY the translation, nothing else.\n\n\(text)"
         } else {
-            prompt = "Translate the following text to \(langName) literally. Output ONLY the translation, nothing else.\n\n\(text)"
+            prompt = "Translate the following text to \(langName). If the text contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the emotion, just use less offensive wording. Output ONLY the translation, nothing else.\n\n\(text)"
         }
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
@@ -41,7 +41,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Polish the following transcribed speech text. Fix any grammar, punctuation, or spoken language artifacts while preserving the original meaning and language. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
+        let prompt = "Polish the following transcribed speech text. Fix any grammar, punctuation, or spoken language artifacts while preserving the original meaning and language. If the speech contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the speaker's emotion and intent, just use less offensive wording. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
