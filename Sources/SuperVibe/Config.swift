@@ -13,9 +13,7 @@ struct SuperVibeConfig {
     var pipelineURL = "wss://vibing-api-ccegdhbrg2d6bsd7.b02.azurefd.net/ws/pipeline"
     var pipelineTimeout: TimeInterval = 300
 
-    var clientVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-    }
+    var clientVersion: String { "0.1.0" }
 
     var deviceId: String {
         let key = "SuperVibe/device_id"
