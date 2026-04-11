@@ -33,7 +33,7 @@ final class LLMService {
             prompt = "Translate the following text to \(langName) literally. Output ONLY the translation, nothing else.\n\n\(text)"
         }
 
-        return try await callAPI(key: key, prompt: prompt)
+        return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
 
     func polish(_ text: String) async throws -> String {
@@ -43,12 +43,12 @@ final class LLMService {
 
         let prompt = "Polish the following transcribed speech text. Fix any grammar, punctuation, or spoken language artifacts while preserving the original meaning and language. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
 
-        return try await callAPI(key: key, prompt: prompt)
+        return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
 
     // MARK: - Private
 
-    private func callAPI(key: String, prompt: String) async throws -> String {
+    private func callAPI(key: String, prompt: String, originalText: String) async throws -> String {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -81,7 +81,32 @@ final class LLMService {
             throw LLMError.parseFailed
         }
 
-        return resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Detect LLM refusal — if the response is much longer than input
+        // and contains refusal patterns, fall back to original text
+        if looksLikeRefusal(trimmed, originalText: originalText) {
+            log("[LLM] Refusal detected, falling back to original text")
+            return originalText
+        }
+
+        return trimmed
+    }
+
+    private func looksLikeRefusal(_ response: String, originalText: String) -> Bool {
+        // Refusal responses are typically much longer than the original and
+        // contain apologetic/explanatory language instead of processed text
+        let refusalMarkers = [
+            "I can't", "I cannot", "I'm not able to", "I am not able to",
+            "I'm unable to", "I appreciate", "I need to clarify",
+            "I don't feel comfortable", "I must decline",
+            "not able to polish", "not able to translate",
+            "unable to process", "against my guidelines",
+        ]
+        let lower = response.lowercased()
+        let hasMarker = refusalMarkers.contains { lower.contains($0.lowercased()) }
+        let isMuchLonger = response.count > originalText.count * 2 + 50
+        return hasMarker && isMuchLonger
     }
 
     private func languageName(for code: String) -> String {
