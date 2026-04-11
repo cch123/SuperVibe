@@ -35,23 +35,26 @@ final class LLMService {
 
         let result = try await callAPI(key: key, prompt: prompt, originalText: text)
 
-        // If translate was refused, try polish first (soften in original language),
-        // then translate the cleaned text
+        // If translate was refused, try sanitize first (soften in original language),
+        // then translate the cleaned text. Always fall back to original on failure.
         if result == text {
-            log("[LLM] Translate was refused, retrying: polish original first, then translate")
-            let polished = try await self.sanitize(text)
-            log("[LLM] Polish result: \(polished.prefix(120))")
-            if polished != text {
-                let retryPrompt = "Translate the following text to \(langName). Output ONLY the translation, nothing else.\n\n\(polished)"
-                let translated = try await callAPI(key: key, prompt: retryPrompt, originalText: polished)
-                log("[LLM] Retry translate result: \(translated.prefix(120))")
-                return translated
+            log("[LLM] Translate was refused, retrying: sanitize then translate")
+            let sanitized = try await self.sanitize(text)
+            log("[LLM] Sanitize result: \(sanitized.prefix(120))")
+            if sanitized != text {
+                let retryPrompt = "Translate the following text to \(langName). Output ONLY the translation, nothing else.\n\n\(sanitized)"
+                let translated = try await callAPI(key: key, prompt: retryPrompt, originalText: sanitized)
+                if translated != sanitized {
+                    log("[LLM] Retry translate result: \(translated.prefix(120))")
+                    return translated
+                }
+                log("[LLM] Retry translate also refused, falling back to original")
             } else {
-                log("[LLM] Polish also returned original text, giving up")
+                log("[LLM] Sanitize returned original text, giving up")
             }
         }
 
-        return result
+        return text
     }
 
     func polish(_ text: String) async throws -> String {
@@ -71,7 +74,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Minimally edit the following text in the same language: ONLY replace the explicit/vulgar/sexual words themselves with milder substitutes. Keep the sentence structure, tone, emotion, and aggression level completely unchanged. Do NOT rewrite the whole sentence or soften the attitude — just swap out the worst words. Output ONLY the edited text, nothing else.\n\n\(text)"
+        let prompt = "Minimally edit the following text in the same language: replace only the most explicit words with common euphemisms that still convey the same meaning. Keep the sentence structure, tone, and intent unchanged. Use indirect/euphemistic expressions, NOT other vulgar words. For example: 操→搞, 插入→睡, 他妈的→该死的. Output ONLY the edited text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
