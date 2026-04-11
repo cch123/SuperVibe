@@ -156,7 +156,7 @@ final class LLMService {
         // Detect LLM refusal — check if the response is meta-commentary
         // rather than actual processed text
         if LLMService.looksLikeRefusal(trimmed) {
-            log("[LLM] Refusal detected (raw: \(trimmed.prefix(120))), falling back to original text")
+            log("[LLM] Refusal detected, falling back to original text. Raw response:\n\(trimmed)")
             return originalText
         }
 
