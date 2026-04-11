@@ -38,12 +38,16 @@ final class LLMService {
         // If translate was refused, try polish first (soften in original language),
         // then translate the cleaned text
         if result == text {
-            log("[LLM] Translate refused, retrying: polish then translate")
+            log("[LLM] Translate was refused, retrying: polish original first, then translate")
             let polished = try await self.polish(text)
+            log("[LLM] Polish result: \(polished.prefix(120))")
             if polished != text {
-                // Polished text is clean, now translate it
                 let retryPrompt = "Translate the following text to \(langName). Output ONLY the translation, nothing else.\n\n\(polished)"
-                return try await callAPI(key: key, prompt: retryPrompt, originalText: polished)
+                let translated = try await callAPI(key: key, prompt: retryPrompt, originalText: polished)
+                log("[LLM] Retry translate result: \(translated.prefix(120))")
+                return translated
+            } else {
+                log("[LLM] Polish also returned original text, giving up")
             }
         }
 
