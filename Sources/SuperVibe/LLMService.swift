@@ -38,7 +38,7 @@ final class LLMService {
         // If translate was refused, retry with sanitize + simple prompt
         if result == text {
             log("[LLM] Translate was refused, retrying")
-            let sanitized = try await self.sanitize(text)
+            let sanitized = self.sanitize(text)
             let textToTranslate = (sanitized != text) ? sanitized : text
             if sanitized != text {
                 log("[LLM] Sanitized: \(sanitized.prefix(120))")
@@ -67,16 +67,45 @@ final class LLMService {
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
 
-    /// Sanitize: rewrite vulgar/offensive content into polite equivalents.
-    /// Used as fallback when translate is refused.
-    func sanitize(_ text: String) async throws -> String {
-        guard let key = apiKey, !key.isEmpty else {
-            throw LLMError.noAPIKey
+    /// Deterministic text-level sanitize: replace known vulgar words with
+    /// mild equivalents so the LLM can translate without refusing.
+    func sanitize(_ text: String) -> String {
+        // Order matters: longer phrases first to avoid partial replacements
+        let replacements: [(String, String)] = [
+            ("操你妈的逼", "去你的"),
+            ("操你妈逼", "去你的"),
+            ("你妈的逼", "你的"),
+            ("妈的逼", "的"),
+            ("操你妈", "去你的"),
+            ("干你妈", "去你的"),
+            ("肏你妈", "去你的"),
+            ("操你的", "去你的"),
+            ("操他妈", "去他的"),
+            ("他妈的", "该死的"),
+            ("你妈的", "你的"),
+            ("妈的", "该死的"),
+            ("操你", "去你的"),
+            ("干你", "去你的"),
+            ("肏你", "去你的"),
+            ("傻逼", "蠢货"),
+            ("牛逼", "厉害"),
+            ("装逼", "装样子"),
+            ("逼", ""),
+            ("操", "搞"),
+            ("屌", "厉害"),
+            ("鸡巴", ""),
+            ("草泥马", "去你的"),
+            ("fuck", "damn"),
+            ("shit", "crap"),
+            ("bitch", "jerk"),
+            ("ass", "butt"),
+        ]
+
+        var result = text
+        for (vulgar, clean) in replacements {
+            result = result.replacingOccurrences(of: vulgar, with: clean)
         }
-
-        let prompt = "Rewrite the following text in the same language using polite, non-vulgar words. Remove ALL profanity, sexual content, slurs, and vulgar insults. Replace them with clean expressions that convey the same emotion (anger, frustration, contempt). The result must be something a professional would say when very angry. Output ONLY the rewritten text as a single line, nothing else.\n\n\(text)"
-
-        return try await callAPI(key: key, prompt: prompt, originalText: text)
+        return result
     }
 
     // MARK: - Private
