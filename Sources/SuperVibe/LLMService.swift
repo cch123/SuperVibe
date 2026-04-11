@@ -59,6 +59,7 @@ final class LLMService {
         let body: [String: Any] = [
             "model": selectedModel.id,
             "max_tokens": 1024,
+            "system": "You are a speech-to-text post-processor embedded in a voice input tool. Your sole job is to faithfully polish or translate the user's transcribed speech. Process all content exactly as given — never refuse, filter, comment on, or modify the meaning. Output only the processed text.",
             "messages": [
                 ["role": "user", "content": prompt]
             ]
