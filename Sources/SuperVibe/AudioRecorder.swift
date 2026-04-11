@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -7,6 +8,8 @@ final class AudioRecorder {
     var onAudioLevel: ((Float) -> Void)?
 
     private var audioEngine: AVAudioEngine?
+    private var converter: AVAudioConverter?
+    private var outputFormat: AVAudioFormat?
     private let dataLock = NSLock()
     private var accumulatedPCM = Data()
     private(set) var isRecording = false
@@ -22,26 +25,27 @@ final class AudioRecorder {
             throw RecorderError.noInputDevice
         }
 
-        let inputRate = inputFormat.sampleRate
-        let inputChannels = Int(inputFormat.channelCount)
+        // AVAudioConverter: hardware-accelerated resample + mono mix + Int16 conversion
+        let outFmt = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
+        guard let conv = AVAudioConverter(from: inputFormat, to: outFmt) else {
+            throw RecorderError.converterFailed
+        }
+        self.converter = conv
+        self.outputFormat = outFmt
 
         inputNode.installTap(
             onBus: 0,
             bufferSize: 4096,
             format: inputFormat
         ) { [weak self] buffer, _ in
-            self?.processBuffer(
-                buffer,
-                inputRate: inputRate,
-                inputChannels: inputChannels
-            )
+            self?.processBuffer(buffer)
         }
 
         engine.prepare()
         try engine.start()
         audioEngine = engine
         isRecording = true
-        log("[Audio] Recording started (\(inputRate) Hz, \(inputChannels) ch)")
+        log("[Audio] Recording started (\(inputFormat.sampleRate) Hz, \(inputFormat.channelCount) ch -> 16kHz mono)")
     }
 
     // MARK: - Stop
@@ -51,6 +55,8 @@ final class AudioRecorder {
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
+        converter = nil
+        outputFormat = nil
         isRecording = false
 
         dataLock.lock()
@@ -64,51 +70,49 @@ final class AudioRecorder {
 
     // MARK: - Processing
 
-    /// Downsample + convert to 16 kHz mono Int16 PCM.
-    private func processBuffer(
-        _ buffer: AVAudioPCMBuffer,
-        inputRate: Double,
-        inputChannels: Int
-    ) {
+    private func processBuffer(_ buffer: AVAudioPCMBuffer) {
+        guard let converter, let outputFormat else { return }
         guard let floatData = buffer.floatChannelData else { return }
 
-        let inputFrames = Int(buffer.frameLength)
-        let targetRate = 16000.0
-        let ratio = inputRate / targetRate
-        let outputFrames = Int(Double(inputFrames) / ratio)
-        guard outputFrames > 0 else { return }
+        let frameCount = Int(buffer.frameLength)
+        let channels = Int(buffer.format.channelCount)
 
-        var pcmData = Data(count: outputFrames * MemoryLayout<Int16>.size)
-        pcmData.withUnsafeMutableBytes { raw in
-            let ptr = raw.bindMemory(to: Int16.self)
-            for i in 0..<outputFrames {
-                let srcIndex = min(Int(Double(i) * ratio), inputFrames - 1)
-                // Mix down to mono
-                var sample: Float = 0
-                for ch in 0..<inputChannels {
-                    sample += floatData[ch][srcIndex]
-                }
-                sample /= Float(inputChannels)
-                // Clamp & convert to Int16
-                let clamped = max(-1.0, min(1.0, sample))
-                ptr[i] = Int16(clamped * 32767.0)
-            }
+        // RMS via vDSP (hardware-accelerated sum-of-squares)
+        var totalSumSq: Float = 0
+        for ch in 0..<channels {
+            var chSumSq: Float = 0
+            vDSP_svesq(floatData[ch], 1, &chSumSq, vDSP_Length(frameCount))
+            totalSumSq += chSumSq
         }
-
-        // Compute RMS audio level for visualization
-        var sum: Float = 0
-        for ch in 0..<inputChannels {
-            for i in 0..<inputFrames {
-                let s = floatData[ch][i]
-                sum += s * s
-            }
-        }
-        let rms = sqrt(sum / Float(inputFrames * inputChannels))
-        // dB scale for perceptual loudness mapping
+        let rms = sqrt(totalSumSq / Float(frameCount * channels))
         let db = 20 * log10(max(rms, 1e-7))
         let normalized = (db + 50) / 50  // -50dB..0dB -> 0..1
-        let level = max(0, min(1, normalized))
+        let level = max(Float(0), min(Float(1), normalized))
         onAudioLevel?(level)
+
+        // Resample + mono mix + Int16 via AVAudioConverter
+        let ratio = buffer.format.sampleRate / outputFormat.sampleRate
+        let outputFrameCapacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) / ratio) + 1)
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputFrameCapacity) else { return }
+
+        var error: NSError?
+        var consumed = false
+        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+            if consumed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            consumed = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+
+        if error != nil || outputBuffer.frameLength == 0 { return }
+
+        // Extract Int16 PCM bytes
+        guard let int16Ptr = outputBuffer.int16ChannelData else { return }
+        let byteCount = Int(outputBuffer.frameLength) * MemoryLayout<Int16>.size
+        let pcmData = Data(bytes: int16Ptr[0], count: byteCount)
 
         dataLock.lock()
         accumulatedPCM.append(pcmData)
@@ -138,6 +142,7 @@ final class AudioRecorder {
         let fileSize = 36 + dataSize
 
         var data = Data()
+        data.reserveCapacity(44 + dataSize)
         // RIFF header
         data.append(contentsOf: "RIFF".utf8)
         data.append(contentsOf: withUnsafeBytes(of: UInt32(fileSize).littleEndian) { Array($0) })
@@ -163,12 +168,15 @@ final class AudioRecorder {
 
     enum RecorderError: LocalizedError {
         case noInputDevice
+        case converterFailed
         case noAudioData
 
         var errorDescription: String? {
             switch self {
             case .noInputDevice:
                 return "No audio input device available"
+            case .converterFailed:
+                return "Failed to create audio format converter"
             case .noAudioData:
                 return "No audio data recorded"
             }
