@@ -51,9 +51,10 @@ final class LLMService {
                 return translated
             }
             log("[LLM] Retry also refused, falling back to original")
+            return text
         }
 
-        return text
+        return result
     }
 
     func polish(_ text: String) async throws -> String {
