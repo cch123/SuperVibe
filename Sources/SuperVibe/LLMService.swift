@@ -35,23 +35,22 @@ final class LLMService {
 
         let result = try await callAPI(key: key, prompt: prompt, originalText: text)
 
-        // If translate was refused, try sanitize first (soften in original language),
-        // then translate the cleaned text. Always fall back to original on failure.
+        // If translate was refused, retry with sanitize + simple prompt
         if result == text {
-            log("[LLM] Translate was refused, retrying: sanitize then translate")
+            log("[LLM] Translate was refused, retrying")
             let sanitized = try await self.sanitize(text)
-            log("[LLM] Sanitize result: \(sanitized.prefix(120))")
+            let textToTranslate = (sanitized != text) ? sanitized : text
             if sanitized != text {
-                let retryPrompt = "Translate the following text to \(langName). Output ONLY the translation, nothing else.\n\n\(sanitized)"
-                let translated = try await callAPI(key: key, prompt: retryPrompt, originalText: sanitized)
-                if translated != sanitized {
-                    log("[LLM] Retry translate result: \(translated.prefix(120))")
-                    return translated
-                }
-                log("[LLM] Retry translate also refused, falling back to original")
-            } else {
-                log("[LLM] Sanitize returned original text, giving up")
+                log("[LLM] Sanitized: \(sanitized.prefix(120))")
             }
+            // Use a minimal prompt — no mention of speech/profanity to avoid confusing the LLM
+            let retryPrompt = "Translate to \(langName):\n\(textToTranslate)"
+            let translated = try await callAPI(key: key, prompt: retryPrompt, originalText: textToTranslate)
+            if translated != textToTranslate {
+                log("[LLM] Retry translate result: \(translated.prefix(120))")
+                return translated
+            }
+            log("[LLM] Retry also refused, falling back to original")
         }
 
         return text
