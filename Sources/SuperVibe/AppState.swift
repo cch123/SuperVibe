@@ -481,6 +481,13 @@ final class AppState: @unchecked Sendable {
     private func finishSession() {
         guard stage != .idle else { return }
         stage = .done
+
+        // If GPT returned a refusal, discard it and use raw ASR text
+        if !gptText.isEmpty && LLMService.looksLikeRefusal(gptText) {
+            log("[AppState] GPT refusal detected, falling back to ASR text")
+            gptText = ""
+        }
+
         let raw = gptText.isEmpty ? asrText : gptText
         let finalText = trimTrailingPunctuation(raw)
         statusText = "Done"

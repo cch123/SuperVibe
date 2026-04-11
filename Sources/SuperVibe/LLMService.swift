@@ -85,7 +85,7 @@ final class LLMService {
 
         // Detect LLM refusal — if the response is much longer than input
         // and contains refusal patterns, fall back to original text
-        if looksLikeRefusal(trimmed, originalText: originalText) {
+        if LLMService.looksLikeRefusal(trimmed) {
             log("[LLM] Refusal detected, falling back to original text")
             return originalText
         }
@@ -93,7 +93,7 @@ final class LLMService {
         return trimmed
     }
 
-    private func looksLikeRefusal(_ response: String, originalText: String) -> Bool {
+    static func looksLikeRefusal(_ response: String) -> Bool {
         let refusalMarkers = [
             // English
             "I can't", "I cannot", "I'm not able to", "I am not able to",
@@ -106,7 +106,7 @@ final class LLMService {
             "お手伝いできません", "適切ではない",
             // Chinese
             "抱歉", "无法处理", "无法翻译", "无法润色",
-            "不能处理", "不适当", "我没办法",
+            "不能处理", "不适当", "我没办法", "不能帮",
             // Korean
             "죄송합니다", "처리할 수 없", "도와드릴 수 없",
             // French / Spanish / German
