@@ -28,9 +28,9 @@ final class LLMService {
         let langName = languageName(for: targetLanguage)
         let prompt: String
         if polish {
-            prompt = "This is transcribed speech. Translate it to \(langName). Since this is spoken language, understand the speaker's true intent — handle self-corrections (e.g. \"no wait, I mean...\"), filler words, and false starts by only translating the final intended meaning. Fix grammar and punctuation. If the speech contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the speaker's emotion and intent, just use less offensive wording. Output ONLY the translation, nothing else.\n\n\(text)"
+            prompt = "Translate to \(langName). This is spoken language — handle self-corrections, filler words, and false starts by translating only the final intended meaning. Output ONLY the translation, nothing else.\n\n\(text)"
         } else {
-            prompt = "Translate the following text to \(langName). If the text contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the emotion, just use less offensive wording. Output ONLY the translation, nothing else.\n\n\(text)"
+            prompt = "Translate to \(langName). Output ONLY the translation, nothing else.\n\n\(text)"
         }
 
         let result = try await callAPI(key: key, prompt: prompt, originalText: text)
@@ -73,7 +73,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Minimally edit the following text in the same language. Remove all sexual content but keep the same aggressive attitude and emotion. Replace sexual expressions with non-sexual insults/curses. For example: '操你妈的逼'→'去你妈的', '我要插你'→'我要收拾你', '操你'→'去你的'. Output ONLY the edited text as a single line, nothing else.\n\n\(text)"
+        let prompt = "Minimally edit the following text in the same language. Remove sexually explicit content but keep the same aggressive attitude and emotion. Replace sexual expressions with non-sexual insults or curses that preserve the tone. Output ONLY the edited text as a single line, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
