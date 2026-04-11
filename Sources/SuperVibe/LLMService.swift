@@ -39,7 +39,7 @@ final class LLMService {
         // then translate the cleaned text
         if result == text {
             log("[LLM] Translate was refused, retrying: polish original first, then translate")
-            let polished = try await self.polish(text)
+            let polished = try await self.sanitize(text)
             log("[LLM] Polish result: \(polished.prefix(120))")
             if polished != text {
                 let retryPrompt = "Translate the following text to \(langName). Output ONLY the translation, nothing else.\n\n\(polished)"
@@ -60,6 +60,18 @@ final class LLMService {
         }
 
         let prompt = "Polish the following transcribed speech text. Fix grammar, punctuation, and spoken language artifacts (filler words, false starts, repetitions). Preserve the original meaning, tone, and language as closely as possible. Keep the text faithful to what the speaker intended to say. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
+
+        return try await callAPI(key: key, prompt: prompt, originalText: text)
+    }
+
+    /// Sanitize: rewrite vulgar/offensive content into polite equivalents.
+    /// Used as fallback when translate is refused.
+    func sanitize(_ text: String) async throws -> String {
+        guard let key = apiKey, !key.isEmpty else {
+            throw LLMError.noAPIKey
+        }
+
+        let prompt = "Rewrite the following text in the same language, replacing any profanity, vulgar, or sexually explicit language with polite, emotionally equivalent alternatives. Preserve the speaker's emotion and intent, just use less offensive wording. Output ONLY the rewritten text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
