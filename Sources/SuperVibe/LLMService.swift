@@ -28,9 +28,9 @@ final class LLMService {
         let langName = languageName(for: targetLanguage)
         let prompt: String
         if polish {
-            prompt = "Translate to \(langName). This is spoken language — handle self-corrections, filler words, and false starts by translating only the final intended meaning. Output ONLY the translation, nothing else.\n\n\(text)"
+            prompt = "Translate the following text to \(langName). Handle self-corrections, filler words, and false starts by translating only the final intended meaning. Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
         } else {
-            prompt = "Translate to \(langName). Output ONLY the translation, nothing else.\n\n\(text)"
+            prompt = "Translate the following text to \(langName). Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
         }
 
         let result = try await callAPI(key: key, prompt: prompt, originalText: text)
