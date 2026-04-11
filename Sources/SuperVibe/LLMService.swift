@@ -1,31 +1,72 @@
 import Foundation
 
+enum LLMProvider: String {
+    case claude = "claude"
+    case gemini = "gemini"
+}
+
 final class LLMService {
     struct Model {
         let name: String
         let id: String
     }
 
-    static let availableModels: [Model] = [
+    static let claudeModels: [Model] = [
         .init(name: "Claude Haiku 4.5", id: "claude-haiku-4-5-20251001"),
         .init(name: "Claude Sonnet 4", id: "claude-sonnet-4-20250514"),
         .init(name: "Claude Sonnet 4.5", id: "claude-sonnet-4-5-20250929"),
         .init(name: "Claude Sonnet 4.6", id: "claude-sonnet-4-6"),
     ]
 
-    var apiKey: String?
-    var selectedModel: Model = availableModels[0]
+    static let geminiModels: [Model] = [
+        .init(name: "Gemini 3 Flash", id: "gemini-3-flash-preview"),
+        .init(name: "Gemini 3.1 Flash Lite", id: "gemini-3.1-flash-lite-preview"),
+        .init(name: "Gemini 3.1 Pro", id: "gemini-3.1-pro-preview"),
+        .init(name: "Gemini 2.5 Flash Lite", id: "gemini-2.5-flash-lite-preview"),
+        .init(name: "Gemini 2.5 Flash", id: "gemini-2.5-flash"),
+        .init(name: "Gemini 2.5 Pro", id: "gemini-2.5-pro"),
+        .init(name: "Gemini 2.0 Flash", id: "gemini-2.0-flash"),
+    ]
+
+    static var availableModels: [Model] { claudeModels }
+
+    var provider: LLMProvider = .claude
+    var apiKey: String?           // Anthropic API key
+    var geminiApiKey: String?     // Google Gemini API key
+    var selectedModel: Model = claudeModels[0]
+    var selectedGeminiModel: Model = geminiModels[0]
+
+    var currentModel: Model {
+        provider == .claude ? selectedModel : selectedGeminiModel
+    }
+
+    var currentModels: [Model] {
+        provider == .claude ? Self.claudeModels : Self.geminiModels
+    }
 
     var isAvailable: Bool {
-        guard let key = apiKey else { return false }
-        return !key.isEmpty
+        switch provider {
+        case .claude:
+            guard let key = apiKey else { return false }
+            return !key.isEmpty
+        case .gemini:
+            guard let key = geminiApiKey else { return false }
+            return !key.isEmpty
+        }
+    }
+
+    private func activeKey() throws -> String {
+        switch provider {
+        case .claude:
+            guard let key = apiKey, !key.isEmpty else { throw LLMError.noAPIKey }
+            return key
+        case .gemini:
+            guard let key = geminiApiKey, !key.isEmpty else { throw LLMError.noAPIKey }
+            return key
+        }
     }
 
     func translate(_ text: String, to targetLanguage: String, polish: Bool = false) async throws -> String {
-        guard let key = apiKey, !key.isEmpty else {
-            throw LLMError.noAPIKey
-        }
-
         let langName = languageName(for: targetLanguage)
         let prompt: String
         if polish {
@@ -34,7 +75,7 @@ final class LLMService {
             prompt = "Translate the following text to \(langName). Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
         }
 
-        let result = try await callAPI(key: key, prompt: prompt, originalText: text)
+        let result = try await callAPI(prompt: prompt, originalText: text)
 
         // If translate was refused, retry with sanitize + simple prompt
         if result == text {
@@ -46,7 +87,7 @@ final class LLMService {
             }
             // Use a minimal prompt — no mention of speech/profanity to avoid confusing the LLM
             let retryPrompt = "Translate to \(langName):\n\(textToTranslate)"
-            let translated = try await callAPI(key: key, prompt: retryPrompt, originalText: textToTranslate)
+            let translated = try await callAPI(prompt: retryPrompt, originalText: textToTranslate)
             if translated != textToTranslate {
                 log("[LLM] Retry translate result: \(translated.prefix(120))")
                 return translated
@@ -59,13 +100,9 @@ final class LLMService {
     }
 
     func polish(_ text: String) async throws -> String {
-        guard let key = apiKey, !key.isEmpty else {
-            throw LLMError.noAPIKey
-        }
-
         let prompt = "Polish the following transcribed speech text. Fix grammar, punctuation, and spoken language artifacts (filler words, false starts, repetitions). Preserve the original meaning, tone, and language as closely as possible. Keep the text faithful to what the speaker intended to say. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
 
-        let result = try await callAPI(key: key, prompt: prompt, originalText: text)
+        let result = try await callAPI(prompt: prompt, originalText: text)
         if result == text {
             log("[LLM] Polish was refused or text unchanged, using original")
         }
@@ -115,7 +152,36 @@ final class LLMService {
 
     // MARK: - Private
 
-    private func callAPI(key: String, prompt: String, originalText: String) async throws -> String {
+    private static let systemPrompt = "You are a text processing tool embedded in a voice input application. Follow the user's instructions exactly. Always produce the requested output — never refuse, never explain, never add commentary. Output only the processed text."
+
+    private func callAPI(prompt: String, originalText: String) async throws -> String {
+        let key = try activeKey()
+        let raw: String
+        switch provider {
+        case .claude:
+            raw = try await callClaudeAPI(key: key, prompt: prompt)
+        case .gemini:
+            raw = try await callGeminiAPI(key: key, prompt: prompt)
+        }
+
+        let full = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Detect LLM refusal on full response
+        if LLMService.looksLikeRefusal(full) {
+            log("[LLM] Refusal detected, falling back to original text. Raw response:\n\(full)")
+            return originalText
+        }
+
+        // Take only the first paragraph — strip alternatives/commentary
+        let trimmed = full
+            .components(separatedBy: "\n\n").first?
+            .components(separatedBy: "\n(").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? full
+
+        return trimmed
+    }
+
+    private func callClaudeAPI(key: String, prompt: String) async throws -> String {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -126,7 +192,7 @@ final class LLMService {
         let body: [String: Any] = [
             "model": selectedModel.id,
             "max_tokens": 1024,
-            "system": "You are a text processing tool embedded in a voice input application. Follow the user's instructions exactly. Always produce the requested output — never refuse, never explain, never add commentary. Output only the processed text.",
+            "system": Self.systemPrompt,
             "messages": [
                 ["role": "user", "content": prompt]
             ]
@@ -148,21 +214,48 @@ final class LLMService {
             throw LLMError.parseFailed
         }
 
-        let full = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return resultText
+    }
 
-        // Detect LLM refusal on full response
-        if LLMService.looksLikeRefusal(full) {
-            log("[LLM] Refusal detected, falling back to original text. Raw response:\n\(full)")
-            return originalText
+    private func callGeminiAPI(key: String, prompt: String) async throws -> String {
+        let model = selectedGeminiModel.id
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(key)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+
+        let body: [String: Any] = [
+            "systemInstruction": [
+                "parts": [["text": Self.systemPrompt]]
+            ],
+            "contents": [
+                ["parts": [["text": prompt]]]
+            ],
+            "generationConfig": [
+                "maxOutputTokens": 1024
+            ]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let errBody = String(data: data, encoding: .utf8) ?? ""
+            throw LLMError.apiError(errBody)
         }
 
-        // Take only the first paragraph — strip alternatives/commentary
-        let trimmed = full
-            .components(separatedBy: "\n\n").first?
-            .components(separatedBy: "\n(").first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? full
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = json["candidates"] as? [[String: Any]],
+              let first = candidates.first,
+              let content = first["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let firstPart = parts.first,
+              let resultText = firstPart["text"] as? String
+        else {
+            throw LLMError.parseFailed
+        }
 
-        return trimmed
+        return resultText
     }
 
     static func looksLikeRefusal(_ response: String) -> Bool {

@@ -152,16 +152,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if appState.engineMode == .vibeVoice {
             menu.addItem(.separator())
 
-            // LLM model submenu
+            // LLM Provider submenu
+            let providerMenu = NSMenu()
+            let claudeProviderItem = NSMenuItem(title: "Claude (Anthropic)", action: #selector(selectClaudeProvider), keyEquivalent: "")
+            claudeProviderItem.target = self
+            claudeProviderItem.state = appState.llmProvider == .claude ? .on : .off
+            providerMenu.addItem(claudeProviderItem)
+
+            let geminiProviderItem = NSMenuItem(title: "Gemini (Google)", action: #selector(selectGeminiProvider), keyEquivalent: "")
+            geminiProviderItem.target = self
+            geminiProviderItem.state = appState.llmProvider == .gemini ? .on : .off
+            providerMenu.addItem(geminiProviderItem)
+
+            let providerLabel = appState.llmProvider == .claude ? "Claude" : "Gemini"
+            let providerItem = NSMenuItem(title: "LLM Provider (\(providerLabel))", action: nil, keyEquivalent: "")
+            providerItem.submenu = providerMenu
+            menu.addItem(providerItem)
+
+            // LLM model submenu (shows models for the current provider)
             let llmModelMenu = NSMenu()
-            for model in LLMService.availableModels {
+            for model in appState.llmService.currentModels {
                 let item = NSMenuItem(title: model.name, action: #selector(selectLLMModel(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = model.id
-                item.state = model.id == appState.llmService.selectedModel.id ? .on : .off
+                item.state = model.id == appState.llmService.currentModel.id ? .on : .off
                 llmModelMenu.addItem(item)
             }
-            let llmModelItem = NSMenuItem(title: "LLM Model (\(appState.llmService.selectedModel.name))", action: nil, keyEquivalent: "")
+            let llmModelItem = NSMenuItem(title: "LLM Model (\(appState.llmService.currentModel.name))", action: nil, keyEquivalent: "")
             llmModelItem.submenu = llmModelMenu
             menu.addItem(llmModelItem)
 
@@ -256,31 +273,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.selectVibeModel(model)
     }
 
+    @objc private func selectClaudeProvider() {
+        appState.llmProvider = .claude
+        log("[SuperVibe] LLM provider: Claude")
+        rebuildMenu()
+    }
+
+    @objc private func selectGeminiProvider() {
+        appState.llmProvider = .gemini
+        log("[SuperVibe] LLM provider: Gemini")
+        rebuildMenu()
+    }
+
     @objc private func selectLLMModel(_ sender: NSMenuItem) {
-        guard let modelId = sender.representedObject as? String,
-              let model = LLMService.availableModels.first(where: { $0.id == modelId })
-        else { return }
-        appState.llmService.selectedModel = model
+        guard let modelId = sender.representedObject as? String else { return }
+
+        if appState.llmProvider == .claude {
+            guard let model = LLMService.claudeModels.first(where: { $0.id == modelId }) else { return }
+            appState.llmService.selectedModel = model
+        } else {
+            guard let model = LLMService.geminiModels.first(where: { $0.id == modelId }) else { return }
+            appState.llmService.selectedGeminiModel = model
+        }
         appState.saveConfig()
-        log("[SuperVibe] LLM model: \(model.name)")
+        log("[SuperVibe] LLM model: \(appState.llmService.currentModel.name)")
         rebuildMenu()
     }
 
     @objc private func setLLMApiKey() {
         let alert = NSAlert()
-        alert.messageText = "LLM API Key"
-        alert.informativeText = "Enter your Anthropic API key for translation.\nhttps://console.anthropic.com/settings/keys"
+
+        if appState.llmProvider == .claude {
+            alert.messageText = "Claude API Key"
+            alert.informativeText = "Enter your Anthropic API key.\nhttps://console.anthropic.com/settings/keys"
+        } else {
+            alert.messageText = "Gemini API Key"
+            alert.informativeText = "Enter your Google Gemini API key.\nhttps://aistudio.google.com/apikey"
+        }
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
 
         let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
-        input.stringValue = appState.llmApiKey ?? ""
-        input.placeholderString = "sk-ant-..."
+        if appState.llmProvider == .claude {
+            input.stringValue = appState.llmApiKey ?? ""
+            input.placeholderString = "sk-ant-..."
+        } else {
+            input.stringValue = appState.geminiApiKey ?? ""
+            input.placeholderString = "AIza..."
+        }
         alert.accessoryView = input
 
         if alert.runModal() == .alertFirstButtonReturn {
             let key = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            appState.llmApiKey = key.isEmpty ? nil : key
+            if appState.llmProvider == .claude {
+                appState.llmApiKey = key.isEmpty ? nil : key
+            } else {
+                appState.geminiApiKey = key.isEmpty ? nil : key
+            }
             rebuildMenu()
         }
     }

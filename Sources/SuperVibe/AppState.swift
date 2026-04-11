@@ -47,6 +47,23 @@ final class AppState: @unchecked Sendable {
         }
     }
 
+    var geminiApiKey: String? {
+        get { llmService.geminiApiKey }
+        set {
+            llmService.geminiApiKey = newValue
+            saveConfig()
+        }
+    }
+
+    var llmProvider: LLMProvider {
+        get { llmService.provider }
+        set {
+            llmService.provider = newValue
+            saveConfig()
+            onConfigChanged?()
+        }
+    }
+
     /// Called when isRecording changes (for menu bar icon update).
     var onRecordingChanged: ((Bool) -> Void)?
     /// Called when engine/config changes (for menu rebuild).
@@ -580,12 +597,22 @@ final class AppState: @unchecked Sendable {
         if let key = json["llm_api_key"] as? String, !key.isEmpty {
             llmService.apiKey = key
         }
+        if let key = json["gemini_api_key"] as? String, !key.isEmpty {
+            llmService.geminiApiKey = key
+        }
+        if let raw = json["llm_provider"] as? String, let p = LLMProvider(rawValue: raw) {
+            llmService.provider = p
+        }
         if let polish = json["polish_enabled"] as? Bool {
             polishEnabled = polish
         }
         if let modelId = json["llm_model"] as? String,
-           let model = LLMService.availableModels.first(where: { $0.id == modelId }) {
+           let model = LLMService.claudeModels.first(where: { $0.id == modelId }) {
             llmService.selectedModel = model
+        }
+        if let modelId = json["gemini_model"] as? String,
+           let model = LLMService.geminiModels.first(where: { $0.id == modelId }) {
+            llmService.selectedGeminiModel = model
         }
     }
 
@@ -614,8 +641,16 @@ final class AppState: @unchecked Sendable {
             config.removeValue(forKey: "llm_api_key")
         }
 
+        if let key = llmService.geminiApiKey, !key.isEmpty {
+            config["gemini_api_key"] = key
+        } else {
+            config.removeValue(forKey: "gemini_api_key")
+        }
+
+        config["llm_provider"] = llmService.provider.rawValue
         config["polish_enabled"] = polishEnabled
         config["llm_model"] = llmService.selectedModel.id
+        config["gemini_model"] = llmService.selectedGeminiModel.id
 
         if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: Self.configFile)
