@@ -6,6 +6,8 @@ Model is loaded once at startup.
 """
 import sys
 import json
+import tempfile
+import os
 
 def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else "mlx-community/VibeVoice-ASR-4bit"
@@ -34,7 +36,7 @@ def main():
                 model=model,
                 audio=audio_path,
                 prefill_step_size=4096,
-                output_path="/dev/null",
+                output_path=os.path.join(tempfile.gettempdir(), ".supervibe_discard"),
             )
             # result is an STTOutput object with .segments list
             if hasattr(result, 'segments') and result.segments:
