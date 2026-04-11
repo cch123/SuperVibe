@@ -94,19 +94,26 @@ final class LLMService {
     }
 
     private func looksLikeRefusal(_ response: String, originalText: String) -> Bool {
-        // Refusal responses are typically much longer than the original and
-        // contain apologetic/explanatory language instead of processed text
         let refusalMarkers = [
+            // English
             "I can't", "I cannot", "I'm not able to", "I am not able to",
             "I'm unable to", "I appreciate", "I need to clarify",
             "I don't feel comfortable", "I must decline",
             "not able to polish", "not able to translate",
             "unable to process", "against my guidelines",
+            // Japanese
+            "すみません", "申し訳", "できません", "対応できません",
+            "お手伝いできません", "適切ではない",
+            // Chinese
+            "抱歉", "无法处理", "无法翻译", "无法润色",
+            "不能处理", "不适当", "我没办法",
+            // Korean
+            "죄송합니다", "처리할 수 없", "도와드릴 수 없",
+            // French / Spanish / German
+            "je ne peux pas", "no puedo", "ich kann nicht",
         ]
         let lower = response.lowercased()
-        let hasMarker = refusalMarkers.contains { lower.contains($0.lowercased()) }
-        let isMuchLonger = response.count > originalText.count * 2 + 50
-        return hasMarker && isMuchLonger
+        return refusalMarkers.contains { lower.contains($0.lowercased()) }
     }
 
     private func languageName(for code: String) -> String {
