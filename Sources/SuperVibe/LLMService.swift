@@ -73,7 +73,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Minimally edit the following text in the same language. Replace all sexually explicit expressions with the euphemism '睡' (sleep with). Keep the sentence structure and tone. For example: '操你妈'→'睡你妈', '插入你'→'睡你', '操你妈的逼了'→'睡你妈了'. Remove body part references, just use '睡'. Output ONLY the edited text, nothing else.\n\n\(text)"
+        let prompt = "Minimally edit the following text in the same language. Remove all sexual content but keep the same aggressive attitude and emotion. Replace sexual expressions with non-sexual insults/curses. For example: '操你妈的逼'→'去你妈的', '我要插你'→'我要收拾你', '操你'→'去你的'. Output ONLY the edited text as a single line, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
@@ -113,7 +113,11 @@ final class LLMService {
             throw LLMError.parseFailed
         }
 
+        // Take only the first paragraph — strip alternatives/commentary
         let trimmed = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: "\n\n").first?
+            .components(separatedBy: "\n(").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? resultText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Detect LLM refusal — check if the response is meta-commentary
         // rather than actual processed text
