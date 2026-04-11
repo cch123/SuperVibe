@@ -9,7 +9,7 @@ final class LLMService {
     static let availableModels: [Model] = [
         .init(name: "Claude Haiku 4.5", id: "claude-haiku-4-5-20251001"),
         .init(name: "Claude Sonnet 4", id: "claude-sonnet-4-20250514"),
-        .init(name: "Claude Sonnet 4.6", id: "claude-sonnet-4-6-20250725"),
+        .init(name: "Claude Sonnet 4.5", id: "claude-sonnet-4-5-20241022"),
     ]
 
     var apiKey: String?
