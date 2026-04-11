@@ -8,6 +8,7 @@ let package = Package(
         .executableTarget(
             name: "SuperVibe",
             path: "Sources/SuperVibe",
+            resources: [.copy("Resources")],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),

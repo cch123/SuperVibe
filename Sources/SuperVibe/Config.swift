@@ -4,6 +4,11 @@ enum PipelineStage: Equatable {
     case idle, recording, recognizing, translating, done, error
 }
 
+enum EngineMode: String {
+    case cloud = "cloud"
+    case vibeVoice = "vibevoice"
+}
+
 struct SuperVibeConfig {
     var pipelineURL = "wss://vibing-api-ccegdhbrg2d6bsd7.b02.azurefd.net/ws/pipeline"
     var pipelineTimeout: TimeInterval = 300

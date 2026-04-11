@@ -117,15 +117,60 @@ final class AudioRecorder {
         onAudioChunk?(pcmData)
     }
 
+    // MARK: - WAV Export
+
+    /// Stop recording and save accumulated PCM data as a 16kHz mono WAV file.
+    func stopAndSaveWAV() throws -> URL {
+        let pcmData = stop()
+        guard !pcmData.isEmpty else {
+            throw RecorderError.noAudioData
+        }
+
+        let wavURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("supervibe-\(UUID().uuidString.prefix(8)).wav")
+        try encodeWAV(pcmData: pcmData, sampleRate: 16000, to: wavURL)
+        log("[Audio] Saved WAV to \(wavURL.path) (\(pcmData.count) bytes PCM)")
+        return wavURL
+    }
+
+    private func encodeWAV(pcmData: Data, sampleRate: Int, to url: URL) throws {
+        let dataSize = pcmData.count
+        let fileSize = 36 + dataSize
+
+        var data = Data()
+        // RIFF header
+        data.append(contentsOf: "RIFF".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(fileSize).littleEndian) { Array($0) })
+        data.append(contentsOf: "WAVE".utf8)
+        // fmt chunk
+        data.append(contentsOf: "fmt ".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // PCM
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // mono
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate * 2).littleEndian) { Array($0) })  // byte rate
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(2).littleEndian) { Array($0) })  // block align
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(16).littleEndian) { Array($0) }) // bits per sample
+        // data chunk
+        data.append(contentsOf: "data".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(dataSize).littleEndian) { Array($0) })
+        data.append(pcmData)
+
+        try data.write(to: url)
+    }
+
     // MARK: - Error
 
     enum RecorderError: LocalizedError {
         case noInputDevice
+        case noAudioData
 
         var errorDescription: String? {
             switch self {
             case .noInputDevice:
                 return "No audio input device available"
+            case .noAudioData:
+                return "No audio data recorded"
             }
         }
     }

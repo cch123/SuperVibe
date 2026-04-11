@@ -47,6 +47,7 @@ final class OverlayViewModel: ObservableObject {
     @Published var asrText = ""
     @Published var gptText = ""
     @Published var isTranslation = false
+    @Published var isPolish = false
 
     @Published var smoothedLevel: CGFloat = 0
 
@@ -109,12 +110,13 @@ struct OverlayRootView: View {
                     onConfirm: vm.onConfirm
                 )
             case .recognizing, .translating, .done:
-                if vm.isTranslation {
+                if vm.isTranslation || vm.isPolish {
                     CyberTranslatingCard(
                         asrText: vm.asrText,
                         gptText: vm.gptText,
                         isTranscribing: vm.stage == .recognizing,
-                        isDone: vm.stage == .done
+                        isDone: vm.stage == .done,
+                        isPolish: vm.isPolish
                     )
                 } else {
                     CyberTextCard(accent: neonCyan, label: vm.stage == .done ? "TRANSCRIBED" : "TRANSCRIBING", text: vm.asrText)
@@ -396,8 +398,13 @@ struct CyberTranslatingCard: View {
     let gptText: String
     var isTranscribing: Bool = false
     var isDone: Bool = false
+    var isPolish: Bool = false
     @State private var dotPhase = 0
     @State private var timer: Timer?
+
+    private var secondaryAccent: Color { isPolish ? neonCyan : neonMagenta }
+    private var secondaryLabelDone: String { isPolish ? "POLISHED" : "TRANSLATED" }
+    private var secondaryLabelActive: String { isPolish ? "POLISHING" : "TRANSLATION" }
 
     private var tailASR: String {
         if asrText.count <= 200 { return asrText }
@@ -411,7 +418,7 @@ struct CyberTranslatingCard: View {
     private var showSpinner: Bool { !isTranscribing && !isDone }
 
     var body: some View {
-        CyberCard(accent: neonMagenta) {
+        CyberCard(accent: isPolish ? neonCyan : neonMagenta) {
             VStack(alignment: .leading, spacing: 14) {
                 // ASR original text
                 VStack(alignment: .leading, spacing: 6) {
@@ -449,25 +456,25 @@ struct CyberTranslatingCard: View {
 
                 // Divider
                 Rectangle()
-                    .fill(neonMagenta.opacity(0.2))
+                    .fill(secondaryAccent.opacity(0.2))
                     .frame(height: 1)
 
-                // Translation
+                // Translation / Polish
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        SpinArc(color: neonMagenta)
+                        SpinArc(color: secondaryAccent)
                             .frame(width: 14, height: 14)
                             .opacity(showSpinner ? 1 : 0)
-                        Text(isDone ? "TRANSLATED" : "TRANSLATION")
+                        Text(isDone ? secondaryLabelDone : secondaryLabelActive)
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(neonMagenta.opacity(isTranscribing ? 0.3 : 1))
-                            .shadow(color: neonMagenta.opacity(isTranscribing ? 0 : 0.6), radius: 3)
+                            .foregroundStyle(secondaryAccent.opacity(isTranscribing ? 0.3 : 1))
+                            .shadow(color: secondaryAccent.opacity(isTranscribing ? 0 : 0.6), radius: 3)
                         HStack(spacing: 3) {
                             ForEach(0..<3, id: \.self) { i in
                                 Circle()
-                                    .fill(neonMagenta.opacity(i < dotPhase ? 0.9 : 0.15))
+                                    .fill(secondaryAccent.opacity(i < dotPhase ? 0.9 : 0.15))
                                     .frame(width: 4, height: 4)
-                                    .shadow(color: neonMagenta.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
+                                    .shadow(color: secondaryAccent.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
                                     .animation(.easeInOut(duration: 0.15), value: dotPhase)
                             }
                         }
@@ -482,13 +489,13 @@ struct CyberTranslatingCard: View {
                             .frame(height: 14)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .overlay {
-                                if !isTranscribing { CyberShimmer(color: neonMagenta) }
+                                if !isTranscribing { CyberShimmer(color: secondaryAccent) }
                             }
                     } else {
                         Text(tailGPT)
                             .font(.system(size: 14, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.9))
-                            .shadow(color: neonMagenta.opacity(0.15), radius: 2)
+                            .shadow(color: secondaryAccent.opacity(0.15), radius: 2)
                             .lineSpacing(4)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }

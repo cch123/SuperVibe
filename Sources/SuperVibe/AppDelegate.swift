@@ -7,6 +7,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBar()
         requestPermissions()
+
+        // Check VibeVoice availability in background
+        appState.checkVibeVoiceAvailability()
+
+        // Warmup VibeVoice if it's the selected engine
+        if appState.engineMode == .vibeVoice {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                try? self?.appState.vibeVoice.warmup()
+            }
+        }
     }
 
     // MARK: - Status Bar
@@ -33,6 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.rebuildMenu()
             }
         }
+
+        appState.onConfigChanged = { [weak self] in
+            DispatchQueue.main.async {
+                self?.rebuildMenu()
+            }
+        }
     }
 
     private func rebuildMenu() {
@@ -48,8 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cancel.target = self
             menu.addItem(cancel)
         } else {
-            menu.addItem(shortcutMenuItem("Transcribe", shortcut: "Right ⌥", action: #selector(toggleRecord)))
-            let translateItem = shortcutMenuItem("Translate", shortcut: "Right ⌥ /", action: #selector(toggleTranslateRecord))
+            menu.addItem(shortcutMenuItem("Transcribe", shortcut: "Right \u{2325}", action: #selector(toggleRecord)))
+            let translateItem = shortcutMenuItem("Translate", shortcut: "Right \u{2325} /", action: #selector(toggleTranslateRecord))
             if appState.translationLanguage == nil {
                 translateItem.isEnabled = false
             }
@@ -57,6 +73,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
+
+        // Engine selection submenu
+        let engineMenu = NSMenu()
+
+        let cloudItem = NSMenuItem(title: "Cloud Pipeline", action: #selector(selectCloudEngine), keyEquivalent: "")
+        cloudItem.target = self
+        cloudItem.state = appState.engineMode == .cloud ? .on : .off
+        engineMenu.addItem(cloudItem)
+
+        let vibeItem = NSMenuItem(title: "VibeVoice (Local)", action: #selector(selectVibeVoiceEngine), keyEquivalent: "")
+        vibeItem.target = self
+        vibeItem.state = appState.engineMode == .vibeVoice ? .on : .off
+        if !appState.vibeVoiceAvailable {
+            vibeItem.title = "VibeVoice (not installed)"
+            vibeItem.isEnabled = false
+        }
+        engineMenu.addItem(vibeItem)
+
+        let engineItem = NSMenuItem(title: "Engine", action: nil, keyEquivalent: "")
+        if appState.engineMode == .vibeVoice {
+            engineItem.title = "Engine (VibeVoice)"
+        }
+        engineItem.submenu = engineMenu
+        menu.addItem(engineItem)
+
+        // VibeVoice model submenu (only when VibeVoice is selected)
+        if appState.engineMode == .vibeVoice {
+            let modelMenu = NSMenu()
+            for model in VibeVoiceSTT.availableModels {
+                let item = NSMenuItem(title: model.name, action: #selector(selectVibeModel(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = model.id
+                item.state = model.id == appState.vibeVoice.currentModel.id ? .on : .off
+                modelMenu.addItem(item)
+            }
+            let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+            modelItem.submenu = modelMenu
+            menu.addItem(modelItem)
+        }
+
+        menu.addItem(.separator())
+
+        // Polish toggle
+        let polishItem = NSMenuItem(title: "Polish", action: #selector(togglePolish), keyEquivalent: "")
+        polishItem.target = self
+        polishItem.state = appState.polishEnabled ? .on : .off
+        menu.addItem(polishItem)
 
         // Translation submenu
         let transMenu = NSMenu()
@@ -83,6 +146,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         transItem.submenu = transMenu
         menu.addItem(transItem)
+
+        // LLM settings (only for VibeVoice mode)
+        if appState.engineMode == .vibeVoice {
+            menu.addItem(.separator())
+
+            // LLM model submenu
+            let llmModelMenu = NSMenu()
+            for model in LLMService.availableModels {
+                let item = NSMenuItem(title: model.name, action: #selector(selectLLMModel(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = model.id
+                item.state = model.id == appState.llmService.selectedModel.id ? .on : .off
+                llmModelMenu.addItem(item)
+            }
+            let llmModelItem = NSMenuItem(title: "LLM Model (\(appState.llmService.selectedModel.name))", action: nil, keyEquivalent: "")
+            llmModelItem.submenu = llmModelMenu
+            menu.addItem(llmModelItem)
+
+            // API Key
+            let keyTitle = appState.llmService.isAvailable
+                ? "LLM API Key (set)"
+                : "Set LLM API Key..."
+            let keyItem = NSMenuItem(title: keyTitle, action: #selector(setLLMApiKey), keyEquivalent: "")
+            keyItem.target = self
+            menu.addItem(keyItem)
+        }
 
         menu.addItem(.separator())
 
@@ -145,7 +234,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc private func togglePolish() {
+        appState.polishEnabled.toggle()
+        log("[SuperVibe] Polish: \(appState.polishEnabled ? "ON" : "OFF")")
+        rebuildMenu()
+    }
+
+    @objc private func selectCloudEngine() {
+        appState.setEngineMode(.cloud)
+    }
+
+    @objc private func selectVibeVoiceEngine() {
+        appState.setEngineMode(.vibeVoice)
+    }
+
+    @objc private func selectVibeModel(_ sender: NSMenuItem) {
+        guard let modelId = sender.representedObject as? String,
+              let model = VibeVoiceSTT.availableModels.first(where: { $0.id == modelId })
+        else { return }
+        appState.selectVibeModel(model)
+    }
+
+    @objc private func selectLLMModel(_ sender: NSMenuItem) {
+        guard let modelId = sender.representedObject as? String,
+              let model = LLMService.availableModels.first(where: { $0.id == modelId })
+        else { return }
+        appState.llmService.selectedModel = model
+        appState.saveConfig()
+        log("[SuperVibe] LLM model: \(model.name)")
+        rebuildMenu()
+    }
+
+    @objc private func setLLMApiKey() {
+        let alert = NSAlert()
+        alert.messageText = "LLM API Key"
+        alert.informativeText = "Enter your Anthropic API key for translation.\nhttps://console.anthropic.com/settings/keys"
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        input.stringValue = appState.llmApiKey ?? ""
+        input.placeholderString = "sk-ant-..."
+        alert.accessoryView = input
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let key = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            appState.llmApiKey = key.isEmpty ? nil : key
+            rebuildMenu()
+        }
+    }
+
     @objc private func quit() {
+        appState.vibeVoice.shutdown()
         NSApplication.shared.terminate(nil)
     }
 }

@@ -11,6 +11,9 @@ bundle: build
 	mkdir -p $(APP_NAME).app/Contents/Resources && \
 	cp "$$BIN_PATH/$(APP_NAME)" $(APP_NAME).app/Contents/MacOS/ && \
 	cp Info.plist $(APP_NAME).app/Contents/ && \
+	if [ -d "$$BIN_PATH/SuperVibe_SuperVibe.bundle" ]; then \
+		cp -R "$$BIN_PATH/SuperVibe_SuperVibe.bundle" $(APP_NAME).app/Contents/Resources/; \
+	fi && \
 	echo "APPL????" > $(APP_NAME).app/Contents/PkgInfo && \
 	codesign --force --sign - $(APP_NAME).app && \
 	echo "Built & signed $(APP_NAME).app"
