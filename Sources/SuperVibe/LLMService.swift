@@ -33,7 +33,21 @@ final class LLMService {
             prompt = "Translate the following text to \(langName). If the text contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the emotion, just use less offensive wording. Output ONLY the translation, nothing else.\n\n\(text)"
         }
 
-        return try await callAPI(key: key, prompt: prompt, originalText: text)
+        let result = try await callAPI(key: key, prompt: prompt, originalText: text)
+
+        // If translate was refused, try polish first (soften in original language),
+        // then translate the cleaned text
+        if result == text {
+            log("[LLM] Translate refused, retrying: polish then translate")
+            let polished = try await self.polish(text)
+            if polished != text {
+                // Polished text is clean, now translate it
+                let retryPrompt = "Translate the following text to \(langName). Output ONLY the translation, nothing else.\n\n\(polished)"
+                return try await callAPI(key: key, prompt: retryPrompt, originalText: polished)
+            }
+        }
+
+        return result
     }
 
     func polish(_ text: String) async throws -> String {
@@ -83,10 +97,10 @@ final class LLMService {
 
         let trimmed = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Detect LLM refusal — if the response is much longer than input
-        // and contains refusal patterns, fall back to original text
+        // Detect LLM refusal — check if the response is meta-commentary
+        // rather than actual processed text
         if LLMService.looksLikeRefusal(trimmed) {
-            log("[LLM] Refusal detected, falling back to original text")
+            log("[LLM] Refusal detected (raw: \(trimmed.prefix(120))), falling back to original text")
             return originalText
         }
 
