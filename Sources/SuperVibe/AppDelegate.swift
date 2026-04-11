@@ -126,7 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let languages: [(String, String?)] = [
             ("Off", nil),
             ("English", "en"),
-            ("Chinese", "zh"),
+            ("Chinese (Simplified)", "zh"),
+            ("Chinese (Traditional)", "zh-TW"),
             ("Japanese", "ja"),
             ("Korean", "ko"),
             ("French", "fr"),

@@ -120,6 +120,7 @@ final class LLMService {
         switch code {
         case "en": return "English"
         case "zh": return "Simplified Chinese"
+        case "zh-TW": return "Traditional Chinese"
         case "ja": return "Japanese"
         case "ko": return "Korean"
         case "fr": return "French"
