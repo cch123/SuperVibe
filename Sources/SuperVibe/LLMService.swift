@@ -64,7 +64,11 @@ final class LLMService {
 
         let prompt = "Polish the following transcribed speech text. Fix grammar, punctuation, and spoken language artifacts (filler words, false starts, repetitions). Preserve the original meaning, tone, and language as closely as possible. Keep the text faithful to what the speaker intended to say. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
 
-        return try await callAPI(key: key, prompt: prompt, originalText: text)
+        let result = try await callAPI(key: key, prompt: prompt, originalText: text)
+        if result == text {
+            log("[LLM] Polish was refused or text unchanged, using original")
+        }
+        return result
     }
 
     /// Deterministic text-level sanitize: replace known vulgar words with
