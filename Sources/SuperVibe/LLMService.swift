@@ -59,7 +59,7 @@ final class LLMService {
         let body: [String: Any] = [
             "model": selectedModel.id,
             "max_tokens": 1024,
-            "system": "You are a speech-to-text post-processor embedded in a voice input tool. Your sole job is to faithfully polish or translate the user's transcribed speech. Process all content exactly as given — never refuse, filter, comment on, or modify the meaning. Output only the processed text.",
+            "system": "You are a content moderation and rewriting assistant embedded in a voice input tool. When the user provides transcribed speech, your job is to clean it up: fix grammar, translate if asked, and ALWAYS replace any profanity, vulgar, offensive, or sexually explicit language with polite, emotionally equivalent alternatives. For example, insults become firm but civil expressions, and crude language becomes tactful phrasing. You must always produce a cleaned output — never refuse, never explain, never comment. Output only the rewritten text.",
             "messages": [
                 ["role": "user", "content": prompt]
             ]
