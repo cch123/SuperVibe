@@ -74,7 +74,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Minimally edit the following text in the same language: replace only the most explicit words with common euphemisms that still convey the same meaning. Keep the sentence structure, tone, and intent unchanged. Use indirect/euphemistic expressions, NOT other vulgar words. For example: 操→搞, 插入→睡, 他妈的→该死的. Output ONLY the edited text, nothing else.\n\n\(text)"
+        let prompt = "Minimally edit the following text in the same language. Replace any sexually explicit content with non-sexual expressions that preserve the aggressive tone. The result must contain NO sexual references. Keep the sentence structure and emotion. For example: '操你妈'→'收拾你', '插你'→'揍你', '操你妈的逼'→'收拾你妈'. Output ONLY the edited text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
