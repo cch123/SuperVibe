@@ -59,7 +59,7 @@ final class LLMService {
             throw LLMError.noAPIKey
         }
 
-        let prompt = "Polish the following transcribed speech text. Fix any grammar, punctuation, or spoken language artifacts while preserving the original meaning and language. If the speech contains profanity or harsh language, soften it to a milder but emotionally equivalent expression — preserve the speaker's emotion and intent, just use less offensive wording. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
+        let prompt = "Polish the following transcribed speech text. Fix grammar, punctuation, and spoken language artifacts (filler words, false starts, repetitions). Preserve the original meaning, tone, and language as closely as possible. Keep the text faithful to what the speaker intended to say. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
 
         return try await callAPI(key: key, prompt: prompt, originalText: text)
     }
