@@ -196,7 +196,6 @@ final class AppState: @unchecked Sendable {
         overlayVM.isTranslation = sessionTranslate
         overlayVM.stage = .recording
         showOverlay()
-        overlayVM.startSmoothing()
 
         // Audio level for waveform (both modes)
         audioRecorder.onAudioLevel = { [weak self] level in
@@ -240,7 +239,7 @@ final class AppState: @unchecked Sendable {
         if isRecording {
             isRecording = false
             onRecordingChanged?(false)
-            overlayVM.stopSmoothing()
+            overlayVM.resetLevels()
             audioRecorder.stop()
         }
         // Clear cloud pipeline callbacks
@@ -264,7 +263,7 @@ final class AppState: @unchecked Sendable {
         guard isRecording else { return }
         isRecording = false
         onRecordingChanged?(false)
-        overlayVM.stopSmoothing()
+        overlayVM.resetLevels()
 
         if stage == .recording {
             stage = .recognizing
@@ -321,7 +320,7 @@ final class AppState: @unchecked Sendable {
         } catch {
             log("[Pipeline] ERROR: \(error)")
             DispatchQueue.main.async {
-                self.overlayVM.stopSmoothing()
+                self.overlayVM.resetLevels()
                 self.stage = .error
                 self.statusText = "Pipeline error: \(error.localizedDescription)"
                 self.setOverlayStage(.error)
@@ -563,7 +562,7 @@ final class AppState: @unchecked Sendable {
     }
 
     private func hideOverlay() {
-        overlayVM.stopSmoothing()
+        overlayVM.resetLevels()
         overlayPanel?.contentView = nil   // tear down SwiftUI view tree (kills all animations & timers)
         overlayPanel?.orderOut(nil)
         overlayPanel = nil                // next showOverlay() will recreate

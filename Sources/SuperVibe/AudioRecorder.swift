@@ -41,6 +41,9 @@ final class AudioRecorder {
             self?.processBuffer(buffer)
         }
 
+        // Pre-allocate ~10 min of 16kHz mono Int16 to avoid reallocation during recording
+        accumulatedPCM.reserveCapacity(16000 * 2 * 600)
+
         engine.prepare()
         try engine.start()
         audioEngine = engine

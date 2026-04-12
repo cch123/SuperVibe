@@ -49,35 +49,32 @@ final class OverlayViewModel: ObservableObject {
     @Published var isTranslation = false
     @Published var isPolish = false
 
-    @Published var smoothedLevel: CGFloat = 0
-
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
 
-    private var targetLevel: CGFloat = 0
-    private var timer: Timer?
+    /// Raw target level set by audio callback (~44 Hz). Not @Published —
+    /// the TimelineView in RecordingHUD drives rendering, so we don't need
+    /// a separate Timer or Published property to trigger SwiftUI updates.
+    private(set) var targetLevel: CGFloat = 0
+
+    /// Smoothed level, updated each TimelineView frame (30 FPS).
+    /// Not @Published — read directly by the TimelineView content closure.
+    private(set) var smoothedLevel: CGFloat = 0
 
     func pushLevel(_ level: Float) {
-        // Just store target; smoothing happens on timer
         targetLevel = CGFloat(level)
     }
 
-    func startSmoothing() {
-        timer?.invalidate()
-        // 60 fps smoothing loop
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if self.targetLevel > self.smoothedLevel {
-                self.smoothedLevel += (self.targetLevel - self.smoothedLevel) * 0.40
-            } else {
-                self.smoothedLevel += (self.targetLevel - self.smoothedLevel) * 0.15
-            }
+    /// Called once per TimelineView frame to advance the smoothing filter.
+    func updateSmoothing() {
+        if targetLevel > smoothedLevel {
+            smoothedLevel += (targetLevel - smoothedLevel) * 0.40
+        } else {
+            smoothedLevel += (targetLevel - smoothedLevel) * 0.15
         }
     }
 
-    func stopSmoothing() {
-        timer?.invalidate()
-        timer = nil
+    func resetLevels() {
         smoothedLevel = 0
         targetLevel = 0
     }
@@ -104,7 +101,7 @@ struct OverlayRootView: View {
             switch vm.stage {
             case .recording:
                 RecordingHUD(
-                    level: vm.smoothedLevel,
+                    vm: vm,
                     accent: vm.isTranslation ? neonMagenta : neonCyan,
                     onCancel: vm.onCancel,
                     onConfirm: vm.onConfirm
@@ -190,7 +187,7 @@ struct ScanLines: View {
 // MARK: - 1. Recording HUD
 
 struct RecordingHUD: View {
-    let level: CGFloat
+    let vm: OverlayViewModel
     var accent: Color = neonCyan
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
@@ -221,9 +218,10 @@ struct RecordingHUD: View {
             }
             .buttonStyle(.plain)
 
-            // 5-bar waveform
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+            // 5-bar waveform — 30 FPS is plenty for smooth animation
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
                 let t = timeline.date.timeIntervalSinceReferenceDate
+                let _ = vm.updateSmoothing()
                 HStack(alignment: .center, spacing: barSpacing) {
                     ForEach(0..<count, id: \.self) { i in
                         let h = barH(i, t)
@@ -231,10 +229,6 @@ struct RecordingHUD: View {
                             .fill(accent)
                             .shadow(color: accent.opacity(0.5), radius: 3)
                             .frame(width: barWidth, height: h)
-                            .animation(
-                                .interpolatingSpring(stiffness: 180, damping: 8),
-                                value: h
-                            )
                     }
                 }
                 .frame(height: 50)
@@ -274,7 +268,7 @@ struct RecordingHUD: View {
         let j2 = sin(t * 7.3 + fi * 4.1) * 0.15
         let jitter = 1.0 + j1 + j2
         // Ensure at least ~20% amplitude even at low audio levels
-        let boosted = max(level, 0.2)
+        let boosted = max(vm.smoothedLevel, 0.2)
         let h = minH + boosted * w * CGFloat(jitter) * (maxH - minH)
         return max(minH, h)
     }
