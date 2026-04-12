@@ -68,6 +68,8 @@ final class AppState: @unchecked Sendable {
     var onRecordingChanged: ((Bool) -> Void)?
     /// Called when engine/config changes (for menu rebuild).
     var onConfigChanged: (() -> Void)?
+    /// Called when a user action fails and needs a visible alert.
+    var onAlert: ((String, String) -> Void)?
 
     // MARK: - Private
 
@@ -162,11 +164,13 @@ final class AppState: @unchecked Sendable {
                 startRecording(translate: true)
             } else {
                 log("[AppState] No translation language set")
+                onAlert?("Translation Not Configured", "Please select a target language in the Translation menu before using the translate shortcut.")
             }
         } else if translationLanguage != nil {
             startRecording(translate: true)
         } else {
             log("[AppState] No translation language set, ignoring translate toggle")
+            onAlert?("Translation Not Configured", "Please select a target language in the Translation menu before using the translate shortcut.")
         }
     }
 
@@ -317,6 +321,7 @@ final class AppState: @unchecked Sendable {
         } catch {
             log("[Pipeline] ERROR: \(error)")
             DispatchQueue.main.async {
+                self.overlayVM.stopSmoothing()
                 self.stage = .error
                 self.statusText = "Pipeline error: \(error.localizedDescription)"
                 self.setOverlayStage(.error)
@@ -558,7 +563,10 @@ final class AppState: @unchecked Sendable {
     }
 
     private func hideOverlay() {
+        overlayVM.stopSmoothing()
+        overlayPanel?.contentView = nil   // tear down SwiftUI view tree (kills all animations & timers)
         overlayPanel?.orderOut(nil)
+        overlayPanel = nil                // next showOverlay() will recreate
         overlayVM.stage = .idle
         overlayVM.asrText = ""
         overlayVM.gptText = ""

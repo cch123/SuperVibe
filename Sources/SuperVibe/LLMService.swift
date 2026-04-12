@@ -22,7 +22,7 @@ final class LLMService {
         .init(name: "Gemini 3 Flash", id: "gemini-3-flash-preview"),
         .init(name: "Gemini 3.1 Flash Lite", id: "gemini-3.1-flash-lite-preview"),
         .init(name: "Gemini 3.1 Pro", id: "gemini-3.1-pro-preview"),
-        .init(name: "Gemini 2.5 Flash Lite", id: "gemini-2.5-flash-lite-preview"),
+        .init(name: "Gemini 2.5 Flash Lite", id: "gemini-2.5-flash-lite"),
         .init(name: "Gemini 2.5 Flash", id: "gemini-2.5-flash"),
         .init(name: "Gemini 2.5 Pro", id: "gemini-2.5-pro"),
         .init(name: "Gemini 2.0 Flash", id: "gemini-2.0-flash"),

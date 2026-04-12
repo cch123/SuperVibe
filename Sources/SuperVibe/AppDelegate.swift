@@ -49,6 +49,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.rebuildMenu()
             }
         }
+
+        appState.onAlert = { title, message in
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = message
+                alert.alertStyle = .informational
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
     }
 
     private func rebuildMenu() {
@@ -189,6 +200,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let keyItem = NSMenuItem(title: keyTitle, action: #selector(setLLMApiKey), keyEquivalent: "")
             keyItem.target = self
             menu.addItem(keyItem)
+
+            // Gemini: link to AI Studio quota page
+            if appState.llmProvider == .gemini {
+                let linkItem = NSMenuItem(title: "View Quota in AI Studio...", action: #selector(openGeminiQuota), keyEquivalent: "")
+                linkItem.target = self
+                menu.addItem(linkItem)
+            }
         }
 
         menu.addItem(.separator())
@@ -258,6 +276,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
     }
 
+    @objc private func openGeminiQuota() {
+        if let url = URL(string: "https://aistudio.google.com/usage?timeRange=last-28-days&tab=rate-limit") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     @objc private func selectCloudEngine() {
         appState.setEngineMode(.cloud)
     }
@@ -313,18 +337,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Cancel")
 
-        let input = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 350, height: 60))
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .bezelBorder
+
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 350, height: 60))
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.textContainerInset = NSSize(width: 4, height: 4)
+
         if appState.llmProvider == .claude {
-            input.stringValue = appState.llmApiKey ?? ""
-            input.placeholderString = "sk-ant-..."
+            textView.string = appState.llmApiKey ?? ""
         } else {
-            input.stringValue = appState.geminiApiKey ?? ""
-            input.placeholderString = "AIza..."
+            textView.string = appState.geminiApiKey ?? ""
         }
-        alert.accessoryView = input
+
+        scrollView.documentView = textView
+        alert.accessoryView = scrollView
 
         if alert.runModal() == .alertFirstButtonReturn {
-            let key = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
             if appState.llmProvider == .claude {
                 appState.llmApiKey = key.isEmpty ? nil : key
             } else {

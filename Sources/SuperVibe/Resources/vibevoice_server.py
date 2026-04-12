@@ -8,6 +8,15 @@ import sys
 import json
 import tempfile
 import os
+import multiprocessing.resource_tracker
+
+# Suppress semaphore leak warnings from mlx_audio internals on shutdown
+_original_warn = multiprocessing.resource_tracker.warnings.warn
+def _filtered_warn(msg, *args, **kwargs):
+    if "leaked semaphore" in str(msg):
+        return
+    _original_warn(msg, *args, **kwargs)
+multiprocessing.resource_tracker.warnings.warn = _filtered_warn
 
 def main():
     model_name = sys.argv[1] if len(sys.argv) > 1 else "mlx-community/VibeVoice-ASR-4bit"
