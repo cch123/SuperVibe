@@ -132,6 +132,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         polishItem.state = appState.polishEnabled ? .on : .off
         menu.addItem(polishItem)
 
+        // Ambient context toggle
+        let ambientItem = NSMenuItem(title: "Ambient Context", action: #selector(toggleAmbientContext), keyEquivalent: "")
+        ambientItem.target = self
+        ambientItem.state = appState.ambientContextEnabled ? .on : .off
+        ambientItem.toolTip = "Send a snapshot of the focused window to the LLM so polish/translate can disambiguate names and jargon. Skipped for password managers and system prefs."
+        menu.addItem(ambientItem)
+
+        // User hotwords dictionary
+        let hotwordsItem = NSMenuItem(title: "Edit Hotwords...", action: #selector(editHotwords), keyEquivalent: "")
+        hotwordsItem.target = self
+        hotwordsItem.toolTip = "Open ~/.SuperVibe/hotwords.txt — one term per line. These ride along with every ASR request so first-occurrence names (Typeless, SuperVibe, BOM...) transcribe correctly."
+        menu.addItem(hotwordsItem)
+
         // Translation submenu
         let transMenu = NSMenu()
         let languages: [(String, String?)] = [
@@ -274,6 +287,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.polishEnabled.toggle()
         log("[SuperVibe] Polish: \(appState.polishEnabled ? "ON" : "OFF")")
         rebuildMenu()
+    }
+
+    @objc private func toggleAmbientContext() {
+        appState.toggleAmbientContext()
+        rebuildMenu()
+    }
+
+    @objc private func editHotwords() {
+        let url = HotwordBuilder.ensureUserHotwordsFileExists()
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func openGeminiQuota() {

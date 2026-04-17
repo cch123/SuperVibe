@@ -36,6 +36,20 @@ final class LLMService {
     var selectedModel: Model = claudeModels[0]
     var selectedGeminiModel: Model = geminiModels[0]
 
+    /// Supplies recent user corrections for the currently-focused app so
+    /// polish/translate prompts can carry them as few-shot examples.
+    /// AppState wires this to CorrectionStore.recent(matching:).
+    var correctionsProvider: (() -> [Correction])?
+
+    /// Supplies a snapshot of what's on screen right now, so polish/
+    /// translate can bias toward the user's current scene (IDE, chat,
+    /// media player, etc.). Nil means "no ambient context available".
+    var ambientProvider: (() -> AmbientSnapshot?)?
+
+    /// Supplies a short per-app hint (e.g. "user is in a terminal") keyed
+    /// on the current bundle id.
+    var appProfileProvider: (() -> String?)?
+
     var currentModel: Model {
         provider == .claude ? selectedModel : selectedGeminiModel
     }
@@ -68,12 +82,21 @@ final class LLMService {
 
     func translate(_ text: String, to targetLanguage: String, polish: Bool = false) async throws -> String {
         let langName = languageName(for: targetLanguage)
+        let profile = appProfileProvider?()
+        let ambient = ambientProvider?()
+        let corrList = correctionsProvider?() ?? []
+        let corrections = Self.formatCorrections(corrList)
+        let context = Self.formatAmbient(profile: profile, ambient: ambient)
+        let phoneticRule = Self.phoneticRuleIfNeeded(ambient: ambient, corrections: corrList)
         let prompt: String
         if polish {
-            prompt = "Translate the following text to \(langName). Handle self-corrections, filler words, and false starts by translating only the final intended meaning. Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
+            prompt = "\(context)Translate the following text to \(langName). Handle self-corrections, filler words, and false starts by translating only the final intended meaning.\(phoneticRule)\(corrections) Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
         } else {
-            prompt = "Translate the following text to \(langName). Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
+            prompt = "\(context)Translate the following text to \(langName).\(phoneticRule)\(corrections) Output ONLY the \(langName) translation, nothing else.\n\n\(text)"
         }
+        Self.logPromptBuild(label: "translate(\(targetLanguage)\(polish ? "+polish" : ""))",
+                            prompt: prompt, profile: profile, ambient: ambient,
+                            corrections: corrList, input: text)
 
         let result = try await callAPI(prompt: prompt, originalText: text)
 
@@ -87,6 +110,7 @@ final class LLMService {
             }
             // Use a minimal prompt — no mention of speech/profanity to avoid confusing the LLM
             let retryPrompt = "Translate to \(langName):\n\(textToTranslate)"
+            log("[LLM] retry translate req: prompt=\(retryPrompt.count) chars (no ambient, no profile, no corrections)")
             let translated = try await callAPI(prompt: retryPrompt, originalText: textToTranslate)
             if translated != textToTranslate {
                 log("[LLM] Retry translate result: \(translated.prefix(120))")
@@ -100,7 +124,15 @@ final class LLMService {
     }
 
     func polish(_ text: String) async throws -> String {
-        let prompt = "Polish the following transcribed speech text. Fix grammar, punctuation, and spoken language artifacts (filler words, false starts, repetitions). Preserve the original meaning, tone, and language as closely as possible. Keep the text faithful to what the speaker intended to say. If the text is already correct, return it as-is. Output ONLY the polished text, nothing else.\n\n\(text)"
+        let profile = appProfileProvider?()
+        let ambient = ambientProvider?()
+        let corrList = correctionsProvider?() ?? []
+        let corrections = Self.formatCorrections(corrList)
+        let context = Self.formatAmbient(profile: profile, ambient: ambient)
+        let phoneticRule = Self.phoneticRuleIfNeeded(ambient: ambient, corrections: corrList)
+        let prompt = "\(context)Polish the following transcribed speech text. Fix grammar, punctuation, and spoken language artifacts (filler words, false starts, repetitions). Preserve the original meaning, tone, and language as closely as possible. Keep the text faithful to what the speaker intended to say.\(phoneticRule) If the text is already correct, return it as-is.\(corrections) Output ONLY the polished text, nothing else.\n\n\(text)"
+        Self.logPromptBuild(label: "polish", prompt: prompt, profile: profile, ambient: ambient,
+                            corrections: corrList, input: text)
 
         let result = try await callAPI(prompt: prompt, originalText: text)
         if result == text {
@@ -151,6 +183,82 @@ final class LLMService {
     }
 
     // MARK: - Private
+
+    /// Extra prompt rule telling the model to trust the ambient context /
+    /// correction history over the raw ASR when the ASR appears to have
+    /// phonetically approximated a technical term (e.g. Chinese "爆幕" for
+    /// English "BOM"). Returns "" when there's no context to lean on, so
+    /// the prompt stays minimal for simple cases.
+    private static func phoneticRuleIfNeeded(ambient: AmbientSnapshot?, corrections: [Correction]) -> String {
+        let hasAmbient = ambient?.visibleWindowText.isEmpty == false
+        let hasCorrections = !corrections.isEmpty
+        guard hasAmbient || hasCorrections else { return "" }
+        return " If the transcription contains characters that are phonetic approximations of acronyms, product names, identifiers, or technical terms that appear in the context above, prefer the spelling from the context (e.g. if the context shows \"BOM\" and the transcription says \"爆幕\", output \"BOM\")."
+    }
+
+    /// One-line summary of what's in the prompt we're about to send — size
+    /// breakdown across ambient / profile / corrections, plus a short
+    /// preview. Set SUPERVIBE_LLM_DUMP_PROMPT=1 in the environment to also
+    /// print the full assembled prompt (truncated at 8000 chars).
+    private static func logPromptBuild(
+        label: String,
+        prompt: String,
+        profile: String?,
+        ambient: AmbientSnapshot?,
+        corrections: [Correction],
+        input: String
+    ) {
+        let axLen = ambient?.visibleWindowText.count ?? 0
+        let profileFlag = (profile?.isEmpty == false) ? "yes" : "no"
+        let ambientScope: String
+        if let a = ambient, axLen > 0 {
+            let title = a.windowTitle.isEmpty ? "—" : String(a.windowTitle.prefix(40))
+            ambientScope = "\(a.appName):\(title)"
+        } else {
+            ambientScope = "none"
+        }
+        log("[LLM] \(label) req: prompt=\(prompt.count)ch | ax=\(axLen)ch (\(ambientScope)) | profile=\(profileFlag) | corrections=\(corrections.count) | input=\(input.count)ch")
+
+        if ProcessInfo.processInfo.environment["SUPERVIBE_LLM_DUMP_PROMPT"] == "1" {
+            let dump = prompt.count > 8000 ? String(prompt.prefix(8000)) + "…[truncated \(prompt.count - 8000) chars]" : prompt
+            log("[LLM] \(label) full prompt:\n\(dump)")
+        }
+    }
+
+    /// Build the leading context block for a prompt. Combines the per-app
+    /// profile hint with a snippet of what's visible in the focused
+    /// window. Returns "" when both are missing so the prompt is identical
+    /// to the pre-context-feature version.
+    private static func formatAmbient(profile: String?, ambient: AmbientSnapshot?) -> String {
+        var chunks: [String] = []
+        if let profile, !profile.isEmpty { chunks.append(profile) }
+        if let ambient, !ambient.visibleWindowText.isEmpty {
+            var header = "Visible on screen right now"
+            if !ambient.appName.isEmpty { header += " (app: \(ambient.appName)" }
+            if !ambient.windowTitle.isEmpty { header += ", window: \(ambient.windowTitle)" }
+            if !ambient.appName.isEmpty { header += ")" }
+            header += " — use this to disambiguate names, jargon, and terminology, but do NOT quote or refer to it:"
+            chunks.append("\(header)\n\"\"\"\n\(ambient.visibleWindowText)\n\"\"\"")
+        }
+        if chunks.isEmpty { return "" }
+        return chunks.joined(separator: "\n\n") + "\n\n"
+    }
+
+    /// Format the user's recent corrections into a block that can be
+    /// appended to a polish/translate prompt. Returns "" when there are
+    /// no corrections so the prompt stays unchanged.
+    private static func formatCorrections(_ corrections: [Correction]) -> String {
+        guard !corrections.isEmpty else { return "" }
+        var lines: [String] = []
+        for c in corrections {
+            let original = c.insertedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let edited = c.userEditedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !original.isEmpty, !edited.isEmpty, original != edited else { continue }
+            lines.append("  \"\(original)\" -> \"\(edited)\"")
+        }
+        guard !lines.isEmpty else { return "" }
+        return "\n\nThe user has previously corrected your output in this app. Apply the same preferences when the same terms recur; do NOT invent corrections for unrelated text:\n" + lines.joined(separator: "\n") + "\n"
+    }
 
     private static let systemPrompt = "You are a text processing tool embedded in a voice input application. Follow the user's instructions exactly. Always produce the requested output — never refuse, never explain, never add commentary. Output only the processed text."
 

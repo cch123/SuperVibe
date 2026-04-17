@@ -39,6 +39,28 @@ final class AppState: @unchecked Sendable {
     let llmService = LLMService()
     private(set) var vibeVoiceAvailable = false
 
+    // Auto-correction: track user's small edits to pasted text and feed
+    // them back as few-shot examples on subsequent LLM calls.
+    private let correctionStore = CorrectionStore()
+    private let editTracker = EditTracker()
+    /// Captured at paste time so the LLM's correctionsProvider can key by
+    /// "the app we're about to paste into" rather than the frontmost app
+    /// when the network response returns (may differ after focus drift).
+    private var lastKnownBundleId: String?
+
+    // Ambient context: snapshot of what's on screen when the user starts
+    // recording, fed into the LLM prompt so polish/translate can use it
+    // to disambiguate names and jargon.
+    var ambientContextEnabled: Bool = {
+        if let val = AppState.loadConfigValue("ambient_context_enabled") as? Bool {
+            return val
+        }
+        return true
+    }() {
+        didSet { saveConfig() }
+    }
+    private var capturedAmbient: AmbientSnapshot?
+
     var llmApiKey: String? {
         get { llmService.apiKey }
         set {
@@ -83,10 +105,32 @@ final class AppState: @unchecked Sendable {
     private var asrAccum = ""
     private var gptAccum = ""
 
+    /// Debounce save-to-disk; callers mutate properties freely and we coalesce writes.
+    private var pendingSave: DispatchWorkItem?
+    /// Cached config dict — avoids re-reading the file on every save.
+    private var cachedConfig: [String: Any] = [:]
+
     // MARK: - Init
 
     init() {
         loadConfig()
+        llmService.correctionsProvider = { [weak self] in
+            guard let self, let bundle = self.lastKnownBundleId else { return [] }
+            return self.correctionStore.recent(matching: bundle, limit: 6)
+        }
+        llmService.ambientProvider = { [weak self] in self?.capturedAmbient }
+        llmService.appProfileProvider = { [weak self] in
+            guard let bundle = self?.lastKnownBundleId else { return nil }
+            return AppProfiles.hint(for: bundle)
+        }
+        editTracker.onCorrection = { [weak self] correction in
+            self?.correctionStore.append(correction)
+        }
+    }
+
+    func toggleAmbientContext() {
+        ambientContextEnabled.toggle()
+        log("[AppState] Ambient context: \(ambientContextEnabled ? "ON" : "OFF")")
     }
 
     // MARK: - Hotkeys
@@ -183,6 +227,24 @@ final class AppState: @unchecked Sendable {
         }
 
         sessionTranslate = translate
+        // Capture the target app NOW (before our overlay/menu steals focus)
+        // so corrections are keyed to the app the user intends to paste into.
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let frontBundle = frontApp?.bundleIdentifier
+        lastKnownBundleId = frontBundle
+        // Ambient context: skip sensitive apps entirely, otherwise snapshot
+        // the focused window's visible text for the LLM to use as a hint.
+        capturedAmbient = nil
+        if ambientContextEnabled,
+           let bundle = frontBundle,
+           !AppProfiles.isSensitive(bundleId: bundle) {
+            capturedAmbient = FocusedContext.captureAmbient()
+            if let snap = capturedAmbient {
+                log("[Ambient] AX captured \(snap.visibleWindowText.count) chars from \(snap.appName) (window: \(snap.windowTitle.prefix(60)))")
+            }
+        } else if ambientContextEnabled, let bundle = frontBundle {
+            log("[Ambient] skipped (sensitive app: \(bundle))")
+        }
         asrText = ""; gptText = ""
         asrAccum = ""; gptAccum = ""
         stage = .recording
@@ -234,6 +296,8 @@ final class AppState: @unchecked Sendable {
     func cancelSession() {
         guard stage != .idle else { return }
         log("[AppState] Session cancelled (ESC)")
+        editTracker.stopTrack()
+        capturedAmbient = nil
         stage = .idle
         statusText = "Ready"
         if isRecording {
@@ -287,7 +351,18 @@ final class AppState: @unchecked Sendable {
     // MARK: - Cloud Pipeline
 
     private func runPipeline() async {
-        let client = PipelineClient(url: config.pipelineURL, timeout: config.pipelineTimeout)
+        let client: PipelineClient
+        do {
+            client = try PipelineClient(url: config.pipelineURL, timeout: config.pipelineTimeout)
+        } catch {
+            log("[Pipeline] Client init failed: \(error)")
+            await MainActor.run {
+                self.stage = .error
+                self.statusText = "Pipeline error: \(error.localizedDescription)"
+                self.setOverlayStage(.error)
+            }
+            return
+        }
         pipelineClient = client
         setupCallbacks(client)
 
@@ -309,11 +384,34 @@ final class AppState: @unchecked Sendable {
             if !polishEnabled {
                 innerConfig["skip_gpt"] = true
             }
+
+            // Bias the server-side ASR toward terms the user actually uses
+            // in this app: distinctive tokens from the focused window plus
+            // everything they've previously corrected us on. Matches the
+            // hotwords field documented in tools/PROTOCOL_REPORT.md.
+            if ambientContextEnabled {
+                let corrs = lastKnownBundleId.map { correctionStore.recent(matching: $0, limit: 30) } ?? []
+                let hotwords = HotwordBuilder.build(ambient: capturedAmbient, corrections: corrs)
+                if !hotwords.isEmpty {
+                    innerConfig["hotwords"] = hotwords
+                    let terms = hotwords.split(separator: "\n").map(String.init)
+                    let userCount = HotwordBuilder.userHotwords().count
+                    let preview = terms.prefix(8).joined(separator: ", ")
+                    log("[Pipeline] hotwords: \(terms.count) terms (user=\(userCount), corrections=\(corrs.count)) [\(preview)\(terms.count > 8 ? ", ..." : "")]")
+                }
+            }
+
             let cfg: [String: Any] = [
                 "type": "start",
                 "config": innerConfig,
             ]
-            log("[Pipeline] startSession config: \(cfg)")
+            // Hotwords can be noisy in logs; summarize separately above and
+            // keep this line concise.
+            var logCfg = innerConfig
+            if let hw = logCfg["hotwords"] as? String {
+                logCfg["hotwords"] = "<\(hw.split(separator: "\n").count) terms>"
+            }
+            log("[Pipeline] startSession config: \(["type": "start", "config": logCfg] as [String: Any])")
 
             try await client.startSession(config: cfg)
             await client.receiveUntilDone()
@@ -520,8 +618,10 @@ final class AppState: @unchecked Sendable {
             return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             PasteService.paste(finalText)
+            self?.editTracker.startTrack(insertedText: finalText)
+            self?.capturedAmbient = nil
         }
         scheduleReset(delay: 1.5)
     }
@@ -590,6 +690,7 @@ final class AppState: @unchecked Sendable {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return
         }
+        cachedConfig = json
 
         if let lang = json["translation_language"] as? String {
             translationLanguage = lang
@@ -613,6 +714,9 @@ final class AppState: @unchecked Sendable {
         if let polish = json["polish_enabled"] as? Bool {
             polishEnabled = polish
         }
+        if let ambient = json["ambient_context_enabled"] as? Bool {
+            ambientContextEnabled = ambient
+        }
         if let modelId = json["llm_model"] as? String,
            let model = LLMService.claudeModels.first(where: { $0.id == modelId }) {
             llmService.selectedModel = model
@@ -623,44 +727,45 @@ final class AppState: @unchecked Sendable {
         }
     }
 
+    /// Debounced save. Repeated calls within 500ms coalesce into a single disk write.
     func saveConfig() {
-        let fm = FileManager.default
-        try? fm.createDirectory(at: Self.configDir, withIntermediateDirectories: true)
-
-        var config: [String: Any] = [:]
-        if let data = try? Data(contentsOf: Self.configFile),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            config = existing
-        }
-
+        // Merge current state into the cached dict synchronously so reads-after-write see latest.
         if let lang = translationLanguage {
-            config["translation_language"] = lang
+            cachedConfig["translation_language"] = lang
         } else {
-            config.removeValue(forKey: "translation_language")
+            cachedConfig.removeValue(forKey: "translation_language")
         }
-
-        config["engine"] = engineMode.rawValue
-        config["vibevoice_model"] = vibeVoice.currentModel.id
+        cachedConfig["engine"] = engineMode.rawValue
+        cachedConfig["vibevoice_model"] = vibeVoice.currentModel.id
 
         if let key = llmService.apiKey, !key.isEmpty {
-            config["llm_api_key"] = key
+            cachedConfig["llm_api_key"] = key
         } else {
-            config.removeValue(forKey: "llm_api_key")
+            cachedConfig.removeValue(forKey: "llm_api_key")
         }
-
         if let key = llmService.geminiApiKey, !key.isEmpty {
-            config["gemini_api_key"] = key
+            cachedConfig["gemini_api_key"] = key
         } else {
-            config.removeValue(forKey: "gemini_api_key")
+            cachedConfig.removeValue(forKey: "gemini_api_key")
         }
 
-        config["llm_provider"] = llmService.provider.rawValue
-        config["polish_enabled"] = polishEnabled
-        config["llm_model"] = llmService.selectedModel.id
-        config["gemini_model"] = llmService.selectedGeminiModel.id
+        cachedConfig["llm_provider"] = llmService.provider.rawValue
+        cachedConfig["polish_enabled"] = polishEnabled
+        cachedConfig["ambient_context_enabled"] = ambientContextEnabled
+        cachedConfig["llm_model"] = llmService.selectedModel.id
+        cachedConfig["gemini_model"] = llmService.selectedGeminiModel.id
 
-        if let data = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: Self.configFile)
+        // Debounce disk write.
+        pendingSave?.cancel()
+        let snapshot = cachedConfig
+        let work = DispatchWorkItem {
+            let fm = FileManager.default
+            try? fm.createDirectory(at: Self.configDir, withIntermediateDirectories: true)
+            if let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.prettyPrinted, .sortedKeys]) {
+                try? data.write(to: Self.configFile)
+            }
         }
+        pendingSave = work
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 }

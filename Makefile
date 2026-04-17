@@ -1,4 +1,4 @@
-.PHONY: build bundle run clean
+.PHONY: build bundle run debug debug-prompt clean
 
 APP_NAME = SuperVibe
 
@@ -25,6 +25,13 @@ debug:
 	swift build
 	@BIN_PATH=$$(swift build --show-bin-path) && \
 	"$$BIN_PATH/$(APP_NAME)"
+
+# Same as `debug` but also dumps the full LLM prompt (ambient + profile +
+# corrections + instruction) to stderr for every polish/translate request.
+debug-prompt:
+	swift build
+	@BIN_PATH=$$(swift build --show-bin-path) && \
+	SUPERVIBE_LLM_DUMP_PROMPT=1 "$$BIN_PATH/$(APP_NAME)"
 
 clean:
 	swift package clean

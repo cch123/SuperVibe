@@ -280,8 +280,6 @@ struct CyberTextCard: View {
     let accent: Color
     let label: String
     let text: String
-    @State private var dotPhase = 0
-    @State private var timer: Timer?
 
     /// Show only the tail when text is very long so the card stays compact.
     private var tailText: String {
@@ -294,28 +292,32 @@ struct CyberTextCard: View {
     var body: some View {
         CyberCard(accent: accent) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    SpinArc(color: accent)
-                        .frame(width: 14, height: 14)
-                        .opacity(isDone ? 0 : 1)
+                // TimelineView drives the dot phase — no Timer, auto-cleaned with the view.
+                TimelineView(.periodic(from: .now, by: 0.35)) { timeline in
+                    let dotPhase = Int(timeline.date.timeIntervalSinceReferenceDate / 0.35) % 4
+                    HStack(spacing: 8) {
+                        SpinArc(color: accent)
+                            .frame(width: 14, height: 14)
+                            .opacity(isDone ? 0 : 1)
 
-                    Text(label)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(accent)
-                        .shadow(color: accent.opacity(0.6), radius: 3)
+                        Text(label)
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(accent)
+                            .shadow(color: accent.opacity(0.6), radius: 3)
 
-                    HStack(spacing: 3) {
-                        ForEach(0..<3, id: \.self) { i in
-                            Circle()
-                                .fill(accent.opacity(i < dotPhase ? 0.9 : 0.15))
-                                .frame(width: 4, height: 4)
-                                .shadow(color: accent.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
-                                .animation(.easeInOut(duration: 0.15), value: dotPhase)
+                        HStack(spacing: 3) {
+                            ForEach(0..<3, id: \.self) { i in
+                                Circle()
+                                    .fill(accent.opacity(i < dotPhase ? 0.9 : 0.15))
+                                    .frame(width: 4, height: 4)
+                                    .shadow(color: accent.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
+                                    .animation(.easeInOut(duration: 0.15), value: dotPhase)
+                            }
                         }
+                        .opacity(isDone ? 0 : 1)
                     }
-                    .opacity(isDone ? 0 : 1)
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
 
                 if text.isEmpty {
                     CyberShimmer(color: accent)
@@ -328,15 +330,6 @@ struct CyberTextCard: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-        }
-        .onAppear { startDots() }
-        .onDisappear { timer?.invalidate(); timer = nil }
-    }
-
-    private func startDots() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { _ in
-            DispatchQueue.main.async { dotPhase = (dotPhase + 1) % 4 }
         }
     }
 }
@@ -393,8 +386,6 @@ struct CyberTranslatingCard: View {
     var isTranscribing: Bool = false
     var isDone: Bool = false
     var isPolish: Bool = false
-    @State private var dotPhase = 0
-    @State private var timer: Timer?
 
     private var secondaryAccent: Color { isPolish ? neonCyan : neonMagenta }
     private var secondaryLabelDone: String { isPolish ? "POLISHED" : "TRANSLATED" }
@@ -412,98 +403,93 @@ struct CyberTranslatingCard: View {
     private var showSpinner: Bool { !isTranscribing && !isDone }
 
     var body: some View {
-        CyberCard(accent: isPolish ? neonCyan : neonMagenta) {
-            VStack(alignment: .leading, spacing: 14) {
-                // ASR original text
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        SpinArc(color: neonCyan)
-                            .frame(width: 14, height: 14)
+        // TimelineView drives dot phase across both rows — cheaper than Timer + auto cleaned up.
+        TimelineView(.periodic(from: .now, by: 0.35)) { timeline in
+            let dotPhase = Int(timeline.date.timeIntervalSinceReferenceDate / 0.35) % 4
+            CyberCard(accent: isPolish ? neonCyan : neonMagenta) {
+                VStack(alignment: .leading, spacing: 14) {
+                    // ASR original text
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            SpinArc(color: neonCyan)
+                                .frame(width: 14, height: 14)
+                                .opacity(isTranscribing ? 1 : 0)
+                            Text(isTranscribing ? "TRANSCRIBING" : "TRANSCRIBED")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(neonCyan.opacity(isTranscribing ? 1 : 0.7))
+                                .shadow(color: neonCyan.opacity(isTranscribing ? 0.6 : 0), radius: 3)
+                            HStack(spacing: 3) {
+                                ForEach(0..<3, id: \.self) { i in
+                                    Circle()
+                                        .fill(neonCyan.opacity(i < dotPhase ? 0.9 : 0.15))
+                                        .frame(width: 4, height: 4)
+                                        .animation(.easeInOut(duration: 0.15), value: dotPhase)
+                                }
+                            }
                             .opacity(isTranscribing ? 1 : 0)
-                        Text(isTranscribing ? "TRANSCRIBING" : "TRANSCRIBED")
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(neonCyan.opacity(isTranscribing ? 1 : 0.7))
-                            .shadow(color: neonCyan.opacity(isTranscribing ? 0.6 : 0), radius: 3)
-                        HStack(spacing: 3) {
-                            ForEach(0..<3, id: \.self) { i in
-                                Circle()
-                                    .fill(neonCyan.opacity(i < dotPhase ? 0.9 : 0.15))
-                                    .frame(width: 4, height: 4)
-                                    .animation(.easeInOut(duration: 0.15), value: dotPhase)
-                            }
                         }
-                        .opacity(isTranscribing ? 1 : 0)
+                        .frame(maxWidth: .infinity)
+
+                        if asrText.isEmpty {
+                            CyberShimmer(color: neonCyan)
+                        } else {
+                            Text(tailASR)
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundStyle(.white.opacity(isTranscribing ? 0.9 : 0.5))
+                                .lineSpacing(3)
+                                .lineLimit(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
-                    .frame(maxWidth: .infinity)
 
-                    if asrText.isEmpty {
-                        CyberShimmer(color: neonCyan)
-                    } else {
-                        Text(tailASR)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.white.opacity(isTranscribing ? 0.9 : 0.5))
-                            .lineSpacing(3)
-                            .lineLimit(3)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
+                    // Divider
+                    Rectangle()
+                        .fill(secondaryAccent.opacity(0.2))
+                        .frame(height: 1)
 
-                // Divider
-                Rectangle()
-                    .fill(secondaryAccent.opacity(0.2))
-                    .frame(height: 1)
-
-                // Translation / Polish
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        SpinArc(color: secondaryAccent)
-                            .frame(width: 14, height: 14)
+                    // Translation / Polish
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            SpinArc(color: secondaryAccent)
+                                .frame(width: 14, height: 14)
+                                .opacity(showSpinner ? 1 : 0)
+                            Text(isDone ? secondaryLabelDone : secondaryLabelActive)
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(secondaryAccent.opacity(isTranscribing ? 0.3 : 1))
+                                .shadow(color: secondaryAccent.opacity(isTranscribing ? 0 : 0.6), radius: 3)
+                            HStack(spacing: 3) {
+                                ForEach(0..<3, id: \.self) { i in
+                                    Circle()
+                                        .fill(secondaryAccent.opacity(i < dotPhase ? 0.9 : 0.15))
+                                        .frame(width: 4, height: 4)
+                                        .shadow(color: secondaryAccent.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
+                                        .animation(.easeInOut(duration: 0.15), value: dotPhase)
+                                }
+                            }
                             .opacity(showSpinner ? 1 : 0)
-                        Text(isDone ? secondaryLabelDone : secondaryLabelActive)
-                            .font(.system(size: 11, weight: .bold, design: .monospaced))
-                            .foregroundStyle(secondaryAccent.opacity(isTranscribing ? 0.3 : 1))
-                            .shadow(color: secondaryAccent.opacity(isTranscribing ? 0 : 0.6), radius: 3)
-                        HStack(spacing: 3) {
-                            ForEach(0..<3, id: \.self) { i in
-                                Circle()
-                                    .fill(secondaryAccent.opacity(i < dotPhase ? 0.9 : 0.15))
-                                    .frame(width: 4, height: 4)
-                                    .shadow(color: secondaryAccent.opacity(i < dotPhase ? 0.5 : 0), radius: 2)
-                                    .animation(.easeInOut(duration: 0.15), value: dotPhase)
-                            }
                         }
-                        .opacity(showSpinner ? 1 : 0)
-                    }
-                    .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity)
 
-                    if gptText.isEmpty {
-                        Text(isTranscribing ? "Waiting for transcription..." : "")
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.2))
-                            .frame(height: 14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .overlay {
-                                if !isTranscribing { CyberShimmer(color: secondaryAccent) }
-                            }
-                    } else {
-                        Text(tailGPT)
-                            .font(.system(size: 14, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .shadow(color: secondaryAccent.opacity(0.15), radius: 2)
-                            .lineSpacing(4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if gptText.isEmpty {
+                            Text(isTranscribing ? "Waiting for transcription..." : "")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.2))
+                                .frame(height: 14)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .overlay {
+                                    if !isTranscribing { CyberShimmer(color: secondaryAccent) }
+                                }
+                        } else {
+                            Text(tailGPT)
+                                .font(.system(size: 14, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .shadow(color: secondaryAccent.opacity(0.15), radius: 2)
+                                .lineSpacing(4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
             }
-        }
-        .onAppear { startDots() }
-        .onDisappear { timer?.invalidate(); timer = nil }
-    }
-
-    private func startDots() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: true) { _ in
-            DispatchQueue.main.async { dotPhase = (dotPhase + 1) % 4 }
         }
     }
 }

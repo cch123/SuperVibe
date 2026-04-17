@@ -91,7 +91,10 @@ final class AudioRecorder {
         let db = 20 * log10(max(rms, 1e-7))
         let normalized = (db + 50) / 50  // -50dB..0dB -> 0..1
         let level = max(Float(0), min(Float(1), normalized))
-        onAudioLevel?(level)
+        // Audio tap runs on a background thread; UI consumers must be marshalled to main.
+        if let onAudioLevel {
+            DispatchQueue.main.async { onAudioLevel(level) }
+        }
 
         // Resample + mono mix + Int16 via AVAudioConverter
         let ratio = buffer.format.sampleRate / outputFormat.sampleRate

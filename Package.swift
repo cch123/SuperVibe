@@ -12,7 +12,6 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
-                .linkedFramework("ScreenCaptureKit"),
             ]
         )
     ]

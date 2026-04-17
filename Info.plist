@@ -22,10 +22,10 @@
     <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>SuperVibe needs microphone access for voice input.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>SuperVibe captures screenshots for context-aware text processing.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>SuperVibe uses system events to paste text into the active application.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>SuperVibe uses Accessibility to deliver global hotkeys and to learn from your corrections to pasted text.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

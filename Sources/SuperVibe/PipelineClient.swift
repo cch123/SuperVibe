@@ -8,7 +8,6 @@ final class PipelineClient: @unchecked Sendable {
     var onASRDone: (@Sendable (String, TimeInterval) -> Void)?
     var onGPTDelta: (@Sendable (String) -> Void)?
     var onGPTDone: (@Sendable (String, TimeInterval) -> Void)?
-    var onScreenshotDone: (@Sendable (String, [String], TimeInterval) -> Void)?
     var onError: (@Sendable (String) -> Void)?
     var onDone: (@Sendable (TimeInterval) -> Void)?
 
@@ -28,8 +27,20 @@ final class PipelineClient: @unchecked Sendable {
 
     // MARK: - Init
 
-    init(url: String, timeout: TimeInterval) {
-        self.baseURL = URL(string: url)!
+    enum ClientError: LocalizedError {
+        case invalidURL(String)
+        var errorDescription: String? {
+            switch self {
+            case .invalidURL(let s): return "Invalid pipeline URL: \(s)"
+            }
+        }
+    }
+
+    init(url: String, timeout: TimeInterval) throws {
+        guard let parsed = URL(string: url) else {
+            throw ClientError.invalidURL(url)
+        }
+        self.baseURL = parsed
         self.timeout = timeout
         self.session = URLSession(configuration: .default)
     }
@@ -128,11 +139,22 @@ final class PipelineClient: @unchecked Sendable {
             log("[Pipeline] receiveUntilDone: no webSocketTask!")
             return
         }
-        log("[Pipeline] Receive loop started")
+        log("[Pipeline] Receive loop started (timeout=\(timeout)s per frame)")
 
+        let frameTimeout = timeout
         while true {
             do {
-                let message = try await task.receive()
+                // Race the receive against a timeout so a dead server doesn't leak the task forever.
+                let message = try await withThrowingTaskGroup(of: URLSessionWebSocketTask.Message.self) { group in
+                    group.addTask { try await task.receive() }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: UInt64(frameTimeout * 1_000_000_000))
+                        throw URLError(.timedOut)
+                    }
+                    let result = try await group.next()!
+                    group.cancelAll()
+                    return result
+                }
                 switch message {
                 case .string(let text):
                     log("[Pipeline] <<< \(text.prefix(200))")
@@ -148,6 +170,7 @@ final class PipelineClient: @unchecked Sendable {
             } catch {
                 log("[Pipeline] Receive error: \(error)")
                 onError?("WebSocket error: \(error.localizedDescription)")
+                webSocketTask?.cancel(with: .abnormalClosure, reason: nil)
                 return
             }
         }
@@ -182,12 +205,6 @@ final class PipelineClient: @unchecked Sendable {
                 ?? json["text"] as? String ?? ""
             let elapsed = json["elapsed"] as? Double ?? 0
             onGPTDone?(t, elapsed)
-
-        case "screenshot_done":
-            let analysis = json["screenshot_analysis"] as? String ?? ""
-            let hotwords = json["hotwords"] as? [String] ?? []
-            let elapsed = json["elapsed"] as? Double ?? 0
-            onScreenshotDone?(analysis, hotwords, elapsed)
 
         case "error":
             let msg = json["error"] as? String
