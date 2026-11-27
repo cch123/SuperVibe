@@ -2,6 +2,10 @@ import AppKit
 
 log("[SuperVibe] Starting...")
 
+// Writing to the ASR server's stdin after it died must surface as a Swift
+// error, not terminate the app with SIGPIPE.
+signal(SIGPIPE, SIG_IGN)
+
 NSApplication.shared.setActivationPolicy(.accessory)
 
 // Standard Edit menu so Cmd+V works in alert text fields
@@ -16,6 +20,7 @@ editMenuItem.submenu = editMenu
 mainMenu.addItem(editMenuItem)
 NSApplication.shared.mainMenu = mainMenu
 
-let delegate = AppDelegate()
+// Top-level code runs on the main thread.
+let delegate = MainActor.assumeIsolated { AppDelegate() }
 NSApplication.shared.delegate = delegate
 NSApplication.shared.run()

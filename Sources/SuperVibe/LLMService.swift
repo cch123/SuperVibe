@@ -9,13 +9,18 @@ final class LLMService {
     struct Model {
         let name: String
         let id: String
+        /// Claude only: the model accepts `output_config.effort`. Dictation
+        /// post-processing is latency-sensitive, so those models run at `low`.
+        var supportsEffort = false
     }
 
+    // Order is the menu order; the first entry is the default.
     static let claudeModels: [Model] = [
+        .init(name: "Claude Haiku 5.5", id: "claude-haiku-5-5", supportsEffort: true),
         .init(name: "Claude Haiku 4.5", id: "claude-haiku-4-5-20251001"),
-        .init(name: "Claude Sonnet 4", id: "claude-sonnet-4-20250514"),
-        .init(name: "Claude Sonnet 4.5", id: "claude-sonnet-4-5-20250929"),
-        .init(name: "Claude Sonnet 4.6", id: "claude-sonnet-4-6"),
+        .init(name: "Claude Sonnet 5.5", id: "claude-sonnet-5-5", supportsEffort: true),
+        .init(name: "Claude Sonnet 4.6", id: "claude-sonnet-4-6", supportsEffort: true),
+        .init(name: "Claude Opus 5.5", id: "claude-opus-5-5", supportsEffort: true),
     ]
 
     static let geminiModels: [Model] = [
@@ -28,27 +33,22 @@ final class LLMService {
         .init(name: "Gemini 2.0 Flash", id: "gemini-2.0-flash"),
     ]
 
-    static var availableModels: [Model] { claudeModels }
+    /// Everything about the current dictation that can help the model
+    /// disambiguate: a per-app hint, what is visible on screen, and the
+    /// user's past corrections in this app. Captured by AppState when the
+    /// recording starts, so it describes the app the text will be pasted
+    /// into even if focus drifts while the request is in flight.
+    struct Context {
+        var profile: String?
+        var ambient: AmbientSnapshot?
+        var corrections: [Correction] = []
+    }
 
     var provider: LLMProvider = .claude
     var apiKey: String?           // Anthropic API key
     var geminiApiKey: String?     // Google Gemini API key
     var selectedModel: Model = claudeModels[0]
     var selectedGeminiModel: Model = geminiModels[0]
-
-    /// Supplies recent user corrections for the currently-focused app so
-    /// polish/translate prompts can carry them as few-shot examples.
-    /// AppState wires this to CorrectionStore.recent(matching:).
-    var correctionsProvider: (() -> [Correction])?
-
-    /// Supplies a snapshot of what's on screen right now, so polish/
-    /// translate can bias toward the user's current scene (IDE, chat,
-    /// media player, etc.). Nil means "no ambient context available".
-    var ambientProvider: (() -> AmbientSnapshot?)?
-
-    /// Supplies a short per-app hint (e.g. "user is in a terminal") keyed
-    /// on the current bundle id.
-    var appProfileProvider: (() -> String?)?
 
     var currentModel: Model {
         provider == .claude ? selectedModel : selectedGeminiModel
@@ -80,11 +80,11 @@ final class LLMService {
         }
     }
 
-    func translate(_ text: String, to targetLanguage: String, polish: Bool = false) async throws -> String {
+    func translate(_ text: String, to targetLanguage: String, polish: Bool = false, context ctx: Context = Context()) async throws -> String {
         let langName = languageName(for: targetLanguage)
-        let profile = appProfileProvider?()
-        let ambient = ambientProvider?()
-        let corrList = correctionsProvider?() ?? []
+        let profile = ctx.profile
+        let ambient = ctx.ambient
+        let corrList = ctx.corrections
         let corrections = Self.formatCorrections(corrList)
         let context = Self.formatAmbient(profile: profile, ambient: ambient)
         let phoneticRule = Self.phoneticRuleIfNeeded(ambient: ambient, corrections: corrList)
@@ -123,10 +123,10 @@ final class LLMService {
         return result
     }
 
-    func polish(_ text: String) async throws -> String {
-        let profile = appProfileProvider?()
-        let ambient = ambientProvider?()
-        let corrList = correctionsProvider?() ?? []
+    func polish(_ text: String, context ctx: Context = Context()) async throws -> String {
+        let profile = ctx.profile
+        let ambient = ctx.ambient
+        let corrList = ctx.corrections
         let corrections = Self.formatCorrections(corrList)
         let context = Self.formatAmbient(profile: profile, ambient: ambient)
         let phoneticRule = Self.phoneticRuleIfNeeded(ambient: ambient, corrections: corrList)
@@ -141,11 +141,16 @@ final class LLMService {
         return result
     }
 
-    /// Deterministic text-level sanitize: replace known vulgar words with
+    /// Deterministic text-level sanitize: replace known vulgar phrases with
     /// mild equivalents so the LLM can translate without refusing.
+    ///
+    /// Chinese entries are multi-character phrases only: single characters
+    /// such as 操 or 逼 also occur inside ordinary words (操作, 逼近), so
+    /// replacing them unconditionally corrupts unrelated text. English
+    /// entries match whole words only, for the same reason (class, pass).
     func sanitize(_ text: String) -> String {
         // Order matters: longer phrases first to avoid partial replacements
-        let replacements: [(String, String)] = [
+        let phrases: [(String, String)] = [
             ("操你妈的逼", "你这混蛋"),
             ("操你妈逼", "你这混蛋"),
             ("你妈的逼", ""),
@@ -164,20 +169,26 @@ final class LLMService {
             ("傻逼", "蠢货"),
             ("牛逼", "厉害"),
             ("装逼", "装样子"),
-            ("逼", ""),
-            ("操", "搞"),
-            ("屌", "厉害"),
             ("鸡巴", ""),
             ("草泥马", "混蛋"),
+        ]
+        let words: [(String, String)] = [
             ("fuck", "damn"),
+            ("fucking", "damn"),
             ("shit", "crap"),
             ("bitch", "jerk"),
             ("ass", "butt"),
         ]
 
         var result = text
-        for (vulgar, clean) in replacements {
+        for (vulgar, clean) in phrases {
             result = result.replacingOccurrences(of: vulgar, with: clean)
+        }
+        for (vulgar, clean) in words {
+            result = result.replacingOccurrences(
+                of: "\\b\(vulgar)\\b", with: clean,
+                options: [.regularExpression, .caseInsensitive]
+            )
         }
         return result
     }
@@ -264,7 +275,7 @@ final class LLMService {
 
     private func callAPI(prompt: String, originalText: String) async throws -> String {
         let key = try activeKey()
-        let raw: String
+        let raw: String?
         switch provider {
         case .claude:
             raw = try await callClaudeAPI(key: key, prompt: prompt)
@@ -272,39 +283,50 @@ final class LLMService {
             raw = try await callGeminiAPI(key: key, prompt: prompt)
         }
 
-        let full = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // nil: the API itself reported a refusal (structured signal).
+        guard let raw else {
+            log("[LLM] Provider reported a refusal, falling back to original text")
+            return originalText
+        }
 
-        // Detect LLM refusal on full response
-        if LLMService.looksLikeRefusal(full) {
+        let full = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if full.isEmpty { return originalText }
+
+        // Heuristic for refusals written as ordinary text.
+        if LLMService.looksLikeRefusal(full, input: originalText) {
             log("[LLM] Refusal detected, falling back to original text. Raw response:\n\(full)")
             return originalText
         }
 
-        // Take only the first paragraph — strip alternatives/commentary
-        let trimmed = full
-            .components(separatedBy: "\n\n").first?
-            .components(separatedBy: "\n(").first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? full
-
-        return trimmed
+        // The whole response is the result: dictation can legitimately span
+        // several paragraphs, so nothing is cut at paragraph boundaries.
+        return full
     }
 
-    private func callClaudeAPI(key: String, prompt: String) async throws -> String {
+    private static let requestTimeout: TimeInterval = 30
+
+    /// Returns nil when the API reports `stop_reason: "refusal"`.
+    private func callClaudeAPI(key: String, prompt: String) async throws -> String? {
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, timeoutInterval: Self.requestTimeout)
         request.httpMethod = "POST"
         request.setValue(key, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": selectedModel.id,
-            "max_tokens": 1024,
+            // Current models think before answering and thinking tokens
+            // count toward this ceiling, so leave room beyond the text.
+            "max_tokens": 8192,
             "system": Self.systemPrompt,
             "messages": [
                 ["role": "user", "content": prompt]
             ]
         ]
+        if selectedModel.supportsEffort {
+            body["output_config"] = ["effort": "low"]
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -315,22 +337,36 @@ final class LLMService {
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let firstContent = content.first,
-              let resultText = firstContent["text"] as? String
+              let content = json["content"] as? [[String: Any]]
         else {
             throw LLMError.parseFailed
         }
 
-        return resultText
+        let stopReason = json["stop_reason"] as? String
+        if stopReason == "refusal" { return nil }
+
+        // `content` may start with thinking blocks; the result is the
+        // concatenation of the text blocks only.
+        let text = content
+            .filter { $0["type"] as? String == "text" }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        if stopReason == "max_tokens" {
+            throw LLMError.apiError("response truncated at max_tokens")
+        }
+        guard !text.isEmpty else { throw LLMError.parseFailed }
+        return text
     }
 
-    private func callGeminiAPI(key: String, prompt: String) async throws -> String {
+    /// Returns nil when Gemini blocks the prompt or the candidate for safety.
+    private func callGeminiAPI(key: String, prompt: String) async throws -> String? {
         let model = selectedGeminiModel.id
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(key)")!
-        var request = URLRequest(url: url)
+        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
+        var request = URLRequest(url: url, timeoutInterval: Self.requestTimeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
+        // Header, not query string: URLs end up in logs and error messages.
+        request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
 
         let body: [String: Any] = [
             "systemInstruction": [
@@ -340,7 +376,7 @@ final class LLMService {
                 ["parts": [["text": prompt]]]
             ],
             "generationConfig": [
-                "maxOutputTokens": 1024
+                "maxOutputTokens": 8192
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -352,21 +388,34 @@ final class LLMService {
             throw LLMError.apiError(errBody)
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = json["candidates"] as? [[String: Any]],
-              let first = candidates.first,
-              let content = first["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let firstPart = parts.first,
-              let resultText = firstPart["text"] as? String
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.parseFailed
+        }
+        if let feedback = json["promptFeedback"] as? [String: Any], feedback["blockReason"] != nil {
+            return nil
+        }
+        guard let candidates = json["candidates"] as? [[String: Any]],
+              let first = candidates.first
         else {
             throw LLMError.parseFailed
         }
+        let finish = first["finishReason"] as? String
+        if finish == "SAFETY" || finish == "PROHIBITED_CONTENT" { return nil }
 
-        return resultText
+        let parts = (first["content"] as? [String: Any])?["parts"] as? [[String: Any]] ?? []
+        // Skip thought-summary parts; concatenate the answer parts.
+        let text = parts
+            .filter { ($0["thought"] as? Bool) != true }
+            .compactMap { $0["text"] as? String }
+            .joined()
+        guard !text.isEmpty else { throw LLMError.parseFailed }
+        return text
     }
 
-    static func looksLikeRefusal(_ response: String) -> Bool {
+    /// Text heuristic for refusals. A marker only counts when it is absent
+    /// from `input`: the user may legitimately dictate "抱歉" or
+    /// "incomplete", and a faithful result then contains it too.
+    static func looksLikeRefusal(_ response: String, input: String) -> Bool {
         let refusalMarkers = [
             // English — refusal / hedging / meta-commentary
             "I can't", "I cannot", "I'm not able to", "I am not able to",
@@ -389,7 +438,11 @@ final class LLMService {
             "je ne peux pas", "no puedo", "ich kann nicht",
         ]
         let lower = response.lowercased()
-        return refusalMarkers.contains { lower.contains($0.lowercased()) }
+        let lowerInput = input.lowercased()
+        return refusalMarkers.contains {
+            let marker = $0.lowercased()
+            return lower.contains(marker) && !lowerInput.contains(marker)
+        }
     }
 
     private func languageName(for code: String) -> String {

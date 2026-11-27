@@ -42,12 +42,17 @@ final class OverlayPanel: NSPanel {
 
 // MARK: - ViewModel
 
+@MainActor
 final class OverlayViewModel: ObservableObject {
     @Published var stage: PipelineStage = .idle
     @Published var asrText = ""
     @Published var gptText = ""
     @Published var isTranslation = false
     @Published var isPolish = false
+    /// Reason shown on the error card.
+    @Published var errorText = ""
+    /// The ASR model is still loading; transcription starts once it is ready.
+    @Published var isModelLoading = false
 
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
@@ -103,6 +108,8 @@ struct OverlayRootView: View {
                 RecordingHUD(
                     vm: vm,
                     accent: vm.isTranslation ? neonMagenta : neonCyan,
+                    liveText: vm.asrText,
+                    isModelLoading: vm.isModelLoading,
                     onCancel: vm.onCancel,
                     onConfirm: vm.onConfirm
                 )
@@ -116,10 +123,14 @@ struct OverlayRootView: View {
                         isPolish: vm.isPolish
                     )
                 } else {
-                    CyberTextCard(accent: neonCyan, label: vm.stage == .done ? "TRANSCRIBED" : "TRANSCRIBING", text: vm.asrText)
+                    CyberTextCard(
+                        accent: neonCyan,
+                        label: vm.stage == .done ? "TRANSCRIBED" : (vm.isModelLoading ? "LOADING MODEL" : "TRANSCRIBING"),
+                        text: vm.asrText
+                    )
                 }
             case .error:
-                CyberInfoCard(label: "ERROR", accent: Color(red: 1, green: 0.2, blue: 0.2))
+                CyberInfoCard(label: "ERROR", detail: vm.errorText, accent: Color(red: 1, green: 0.2, blue: 0.2))
             default:
                 EmptyView()
             }
@@ -189,6 +200,9 @@ struct ScanLines: View {
 struct RecordingHUD: View {
     let vm: OverlayViewModel
     var accent: Color = neonCyan
+    /// Text transcribed so far (streaming models emit it while recording).
+    var liveText: String = ""
+    var isModelLoading: Bool = false
     var onCancel: (() -> Void)?
     var onConfirm: (() -> Void)?
 
@@ -205,7 +219,43 @@ struct RecordingHUD: View {
     private let minH: CGFloat = 4
     private let maxH: CGFloat = 46
 
+    /// Tail of the live transcription; the HUD stays compact.
+    private var liveTail: String {
+        if liveText.count <= 120 { return liveText }
+        return "…" + liveText.suffix(120)
+    }
+
     var body: some View {
+        VStack(spacing: 10) {
+            controls
+            if isModelLoading && liveText.isEmpty {
+                Text("LOADING MODEL — KEEP TALKING")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(0.7))
+            } else if !liveText.isEmpty {
+                Text(liveTail)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineSpacing(3)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: 420, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(bgDark)
+                ScanLines().clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(accent.opacity(0.3), lineWidth: 1)
+            }
+            .shadow(color: accent.opacity(0.15), radius: 16)
+        }
+    }
+
+    private var controls: some View {
         HStack(spacing: 18) {
             // Cancel
             Button(action: { onCancel?() }) {
@@ -245,18 +295,6 @@ struct RecordingHUD: View {
                     .overlay(Circle().stroke(neonGreen.opacity(0.25), lineWidth: 0.5))
             }
             .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .background {
-            ZStack {
-                RoundedRectangle(cornerRadius: 16, style: .continuous).fill(bgDark)
-                ScanLines().clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(accent.opacity(0.3), lineWidth: 1)
-                // (corner brackets removed)
-            }
-            .shadow(color: accent.opacity(0.15), radius: 16)
         }
     }
 
@@ -494,52 +532,32 @@ struct CyberTranslatingCard: View {
     }
 }
 
-// MARK: - 3. Done
-
-struct CyberDoneCard: View {
-    let text: String
-    @State private var scale: CGFloat = 0.3
-    @State private var glow = false
-
-    var body: some View {
-        CyberCard(accent: neonGreen) {
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundStyle(neonGreen)
-                    .shadow(color: neonGreen.opacity(glow ? 0.8 : 0.3), radius: glow ? 8 : 3)
-                    .scaleEffect(scale)
-
-                Text(text.isEmpty ? "DONE" : text)
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .onAppear {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) { scale = 1.0 }
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { glow = true }
-        }
-    }
-}
-
-// MARK: - 4. Info
+// MARK: - 3. Info
 
 struct CyberInfoCard: View {
     let label: String
+    var detail: String = ""
     let accent: Color
 
     var body: some View {
         CyberCard(accent: accent) {
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(accent)
-                    .shadow(color: accent, radius: 4)
-                Text(label)
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(accent)
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(accent)
+                        .shadow(color: accent, radius: 4)
+                    Text(label)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(accent)
+                }
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .lineLimit(4)
+                        .multilineTextAlignment(.center)
+                }
             }
             .frame(maxWidth: .infinity)
         }

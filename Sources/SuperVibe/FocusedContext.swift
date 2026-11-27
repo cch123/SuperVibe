@@ -39,6 +39,9 @@ struct AmbientSnapshot {
 
 enum FocusedContext {
 
+    /// UTF-16 units of field content kept on each side of the cursor.
+    private static let fieldWindow = 4000
+
     /// Capture the currently focused app + text element. Returns nil if
     /// Accessibility permission is missing or no focused element exists.
     static func capture() -> FocusedSnapshot? {
@@ -72,12 +75,25 @@ enum FocusedContext {
             }
         }
 
-        let chars = Array(value)
-        let safeLoc = min(location, chars.count)
-        let safeEnd = min(safeLoc + length, chars.count)
-        let before = String(chars[..<safeLoc])
-        let selected = String(chars[safeLoc..<safeEnd])
-        let after = String(chars[safeEnd...])
+        // The AX selection range is in UTF-16 code units, which is also
+        // NSString's index space; Character offsets would drift after the
+        // first emoji or other non-BMP character.
+        //
+        // Editors and terminals expose their whole buffer as the value. Only
+        // a window around the cursor is kept, so a poll costs O(window)
+        // rather than O(document).
+        let full = value as NSString
+        let safeLoc = min(location, full.length)
+        let safeEnd = min(safeLoc + length, full.length)
+        let windowStart = full.rangeOfComposedCharacterSequence(at: max(0, safeLoc - fieldWindow)).location
+        let windowEndRaw = min(full.length, safeEnd + fieldWindow)
+        let windowEnd = windowEndRaw < full.length
+            ? full.rangeOfComposedCharacterSequence(at: windowEndRaw).location
+            : full.length
+        let before = full.substring(with: NSRange(location: windowStart, length: safeLoc - windowStart))
+        let selected = full.substring(with: NSRange(location: safeLoc, length: safeEnd - safeLoc))
+        let after = full.substring(with: NSRange(location: safeEnd, length: max(0, windowEnd - safeEnd)))
+        let windowed = before + selected + after
 
         return FocusedSnapshot(
             appName: appName,
@@ -86,7 +102,7 @@ enum FocusedContext {
             role: role,
             identifier: identifier,
             windowTitle: windowTitle,
-            fullFieldContent: value,
+            fullFieldContent: windowed,
             textBeforeCursor: before,
             textAfterCursor: after,
             selectedText: selected,
@@ -101,17 +117,25 @@ enum FocusedContext {
     /// "Close", "Sidebar", "New Message" that aren't what the user is
     /// actually reading.
     ///
-    /// Strings contained in `excluding` are skipped so we don't echo back
-    /// the user's own focused-field content.
-    static func captureAmbient(maxVisibleChars: Int = 2500, excluding: String = "") -> AmbientSnapshot? {
-        guard AXIsProcessTrusted() else { return nil }
-        let front = NSWorkspace.shared.frontmostApplication
-        let bundleId = front?.bundleIdentifier ?? ""
-        let appName = front?.localizedName ?? ""
-        let pid = front?.processIdentifier ?? 0
-        guard pid != 0 else { return nil }
+    ///
+    /// The target app is passed in (captured on the main thread when the
+    /// recording starts) so this can run on a background queue: the walk is
+    /// one synchronous IPC round-trip per attribute, and a slow or hung
+    /// target app must not stall the main thread. `timeBudget` bounds the
+    /// whole walk; whatever was collected by then is returned.
+    static func captureAmbient(
+        pid: pid_t,
+        bundleId: String,
+        appName: String,
+        maxVisibleChars: Int = 2500,
+        timeBudget: TimeInterval = 0.4
+    ) -> AmbientSnapshot? {
+        guard AXIsProcessTrusted(), pid != 0 else { return nil }
+        let deadline = Date().addingTimeInterval(timeBudget)
 
         let appElement = AXUIElementCreateApplication(pid)
+        // Bound each IPC call; the default is several seconds.
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
         guard let window = axCopy(appElement, kAXFocusedWindowAttribute) as! AXUIElement? else {
             return nil
         }
@@ -121,15 +145,13 @@ enum FocusedContext {
         var seen = Set<String>()
         var charCount = 0
         var nodeCount = 0
-        let excludeTrim = excluding.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        walkAX(window, depth: 0, maxDepth: 16, maxNodes: 1500, nodeCount: &nodeCount) { text in
+        walkAX(window, depth: 0, maxDepth: 16, maxNodes: 1500, deadline: deadline, nodeCount: &nodeCount) { text in
             guard charCount < maxVisibleChars else { return false }
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A single text area can hold a whole document; only its head
+            // can end up in the snapshot anyway.
+            let trimmed = String(text.prefix(maxVisibleChars)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.count >= 2 else { return true }
-            // Skip the focused field's own value (avoid echoing it back).
-            if !excludeTrim.isEmpty, trimmed == excludeTrim { return true }
-            if !excludeTrim.isEmpty, excludeTrim.contains(trimmed), trimmed.count > 24 { return true }
             if seen.contains(trimmed) { return true }
             seen.insert(trimmed)
             collected.append(trimmed)
@@ -167,10 +189,11 @@ enum FocusedContext {
         depth: Int,
         maxDepth: Int,
         maxNodes: Int,
+        deadline: Date,
         nodeCount: inout Int,
         emit: (String) -> Bool
     ) {
-        if depth > maxDepth || nodeCount >= maxNodes { return }
+        if depth > maxDepth || nodeCount >= maxNodes || Date() >= deadline { return }
         nodeCount += 1
 
         let role = (axCopy(element, kAXRoleAttribute) as? String) ?? ""
@@ -187,8 +210,8 @@ enum FocusedContext {
 
         if let kids = axCopy(element, kAXChildrenAttribute) as? [AXUIElement] {
             for child in kids {
-                walkAX(child, depth: depth + 1, maxDepth: maxDepth, maxNodes: maxNodes, nodeCount: &nodeCount, emit: emit)
-                if nodeCount >= maxNodes { return }
+                walkAX(child, depth: depth + 1, maxDepth: maxDepth, maxNodes: maxNodes, deadline: deadline, nodeCount: &nodeCount, emit: emit)
+                if nodeCount >= maxNodes || Date() >= deadline { return }
             }
         }
     }

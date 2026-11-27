@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let appState = AppState()
@@ -8,15 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
         requestPermissions()
 
-        // Check VibeVoice availability in background
+        // Detect the mlx-audio installation and load the ASR model.
         appState.checkVibeVoiceAvailability()
+    }
 
-        // Warmup VibeVoice if it's the selected engine
-        if appState.engineMode == .vibeVoice {
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                try? self?.appState.vibeVoice.warmup()
-            }
-        }
+    func applicationWillTerminate(_ notification: Notification) {
+        appState.vibeVoice.shutdown()
     }
 
     // MARK: - Status Bar
@@ -85,32 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // Engine selection submenu
-        let engineMenu = NSMenu()
-
-        let cloudItem = NSMenuItem(title: "Cloud Pipeline", action: #selector(selectCloudEngine), keyEquivalent: "")
-        cloudItem.target = self
-        cloudItem.state = appState.engineMode == .cloud ? .on : .off
-        engineMenu.addItem(cloudItem)
-
-        let vibeItem = NSMenuItem(title: "VibeVoice (Local)", action: #selector(selectVibeVoiceEngine), keyEquivalent: "")
-        vibeItem.target = self
-        vibeItem.state = appState.engineMode == .vibeVoice ? .on : .off
-        if !appState.vibeVoiceAvailable {
-            vibeItem.title = "VibeVoice (not installed)"
-            vibeItem.isEnabled = false
-        }
-        engineMenu.addItem(vibeItem)
-
-        let engineItem = NSMenuItem(title: "Engine", action: nil, keyEquivalent: "")
-        if appState.engineMode == .vibeVoice {
-            engineItem.title = "Engine (VibeVoice)"
-        }
-        engineItem.submenu = engineMenu
-        menu.addItem(engineItem)
-
-        // VibeVoice model submenu (only when VibeVoice is selected)
-        if appState.engineMode == .vibeVoice {
+        // ASR model
+        if appState.vibeVoiceAvailable {
             let modelMenu = NSMenu()
             for model in VibeVoiceSTT.availableModels {
                 let item = NSMenuItem(title: model.name, action: #selector(selectVibeModel(_:)), keyEquivalent: "")
@@ -119,9 +93,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 item.state = model.id == appState.vibeVoice.currentModel.id ? .on : .off
                 modelMenu.addItem(item)
             }
-            let modelItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+            let status: String
+            switch appState.vibeVoice.state {
+            case .stopped: status = "not loaded"
+            case .loading: status = "loading…"
+            case .ready: status = "ready"
+            case .failed: status = "failed"
+            }
+            let modelItem = NSMenuItem(title: "ASR Model (\(status))", action: nil, keyEquivalent: "")
+            if case .failed(let reason) = appState.vibeVoice.state {
+                modelItem.toolTip = reason
+            }
             modelItem.submenu = modelMenu
             menu.addItem(modelItem)
+        } else {
+            let missing = NSMenuItem(title: "mlx-audio not found (pipx install mlx-audio)", action: nil, keyEquivalent: "")
+            missing.isEnabled = false
+            menu.addItem(missing)
         }
 
         menu.addItem(.separator())
@@ -136,13 +124,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ambientItem = NSMenuItem(title: "Ambient Context", action: #selector(toggleAmbientContext), keyEquivalent: "")
         ambientItem.target = self
         ambientItem.state = appState.ambientContextEnabled ? .on : .off
-        ambientItem.toolTip = "Send a snapshot of the focused window to the LLM so polish/translate can disambiguate names and jargon. Skipped for password managers and system prefs."
+        ambientItem.toolTip = "Read the focused window's text when recording starts: terms from it bias the local ASR, and a snapshot is sent to the LLM so polish/translate can disambiguate names and jargon. Skipped for password managers and system prefs."
         menu.addItem(ambientItem)
 
         // User hotwords dictionary
         let hotwordsItem = NSMenuItem(title: "Edit Hotwords...", action: #selector(editHotwords), keyEquivalent: "")
         hotwordsItem.target = self
-        hotwordsItem.toolTip = "Open ~/.SuperVibe/hotwords.txt — one term per line. These ride along with every ASR request so first-occurrence names (Typeless, SuperVibe, BOM...) transcribe correctly."
+        hotwordsItem.toolTip = "Open ~/.SuperVibe/hotwords.txt — one term per line. These are passed to the ASR model with every recording so names and acronyms (SuperVibe, BOM...) transcribe correctly."
         menu.addItem(hotwordsItem)
 
         // Translation submenu
@@ -172,8 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         transItem.submenu = transMenu
         menu.addItem(transItem)
 
-        // LLM settings (only for VibeVoice mode)
-        if appState.engineMode == .vibeVoice {
+        // LLM settings (polish and translation)
+        do {
             menu.addItem(.separator())
 
             // LLM Provider submenu
@@ -303,14 +291,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let url = URL(string: "https://aistudio.google.com/usage?timeRange=last-28-days&tab=rate-limit") {
             NSWorkspace.shared.open(url)
         }
-    }
-
-    @objc private func selectCloudEngine() {
-        appState.setEngineMode(.cloud)
-    }
-
-    @objc private func selectVibeVoiceEngine() {
-        appState.setEngineMode(.vibeVoice)
     }
 
     @objc private func selectVibeModel(_ sender: NSMenuItem) {

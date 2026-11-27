@@ -1,4 +1,4 @@
-.PHONY: build bundle run debug debug-prompt clean
+.PHONY: build bundle run debug debug-prompt test test-asr clean
 
 APP_NAME = SuperVibe
 
@@ -19,7 +19,17 @@ bundle: build
 	echo "Built & signed $(APP_NAME).app"
 
 run: build
-	.build/debug/$(APP_NAME)
+	@BIN_PATH=$$(swift build -c release --show-bin-path) && \
+	"$$BIN_PATH/$(APP_NAME)"
+
+# Unit tests (no model required).
+test:
+	swift test
+
+# End-to-end ASR test against the real server and model:
+#   make test-asr WAV=/path/to/24kHz-mono-int16.wav [EXPECT=substring]
+test-asr:
+	SUPERVIBE_ASR_TEST_WAV="$(WAV)" SUPERVIBE_ASR_TEST_EXPECT="$(EXPECT)" swift test --filter ASRServerTests
 
 debug:
 	swift build

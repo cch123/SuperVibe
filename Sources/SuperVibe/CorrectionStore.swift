@@ -13,7 +13,9 @@ struct Correction: Codable {
 
 /// Append-only JSONL store at ~/.SuperVibe/corrections.jsonl. Capped to
 /// `maxLines` entries by rewriting the file on append when the cap is hit.
-final class CorrectionStore {
+/// Thread-safe: writes are serialized on `queue`; the file is replaced
+/// atomically, so a concurrent read sees either the old or the new content.
+final class CorrectionStore: @unchecked Sendable {
 
     private static let dir = FileManager.default
         .homeDirectoryForCurrentUser

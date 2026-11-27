@@ -11,7 +11,10 @@ final class HotkeyManager {
     fileprivate var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isKeyDown = false
-    private var slashHandled = false
+    /// Set when Right Option was used as a modifier for another key while
+    /// held (Option+/ for translate, or Option+E etc. to type a character).
+    /// A release then must not toggle recording.
+    private var chordUsed = false
 
     func start() {
         if AXIsProcessTrusted() {
@@ -75,14 +78,14 @@ final class HotkeyManager {
         let optionDown = event.modifierFlags.contains(.option)
         if optionDown && !isKeyDown {
             isKeyDown = true
-            slashHandled = false
+            chordUsed = false
         } else if !optionDown && isKeyDown {
             isKeyDown = false
-            if !slashHandled {
+            if !chordUsed {
                 log("[Hotkey] Right Option UP -> toggle record")
                 onToggleRecord?()
             }
-            slashHandled = false
+            chordUsed = false
         }
     }
 
@@ -90,15 +93,19 @@ final class HotkeyManager {
     /// should be suppressed (consumed).
     fileprivate func handleKeyTap(_ keyCode: Int64) -> Bool {
         if keyCode == 53 { // ESC
-            log("[Hotkey] ESC -> cancel")
             DispatchQueue.main.async { [weak self] in self?.onCancel?() }
             return false // let ESC propagate normally
-        } else if keyCode == 44 && isKeyDown && !slashHandled { // / while Right Option held
-            slashHandled = true
+        }
+        guard isKeyDown else { return false }
+        if keyCode == 44 { // / while Right Option held
+            guard !chordUsed else { return true } // key repeat of the same chord
+            chordUsed = true
             log("[Hotkey] Right Option + / -> toggle translate")
             DispatchQueue.main.async { [weak self] in self?.onToggleTranslate?() }
             return true // suppress the ÷ character
         }
+        // Right Option is being used to type a character (Option+E, ...).
+        chordUsed = true
         return false
     }
 }

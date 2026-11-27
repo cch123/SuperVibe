@@ -1,7 +1,7 @@
 import Foundation
 
-/// Builds the `hotwords` string sent in the pipeline's `start` config so the
-/// server-side ASR is biased toward terms the user actually uses.
+/// Builds the hotword list passed to the ASR model as recognition context,
+/// so it is biased toward terms the user actually uses.
 ///
 /// Ranked by signal strength:
 ///   0. User-curated list at `~/.SuperVibe/hotwords.txt` (a permanent
@@ -15,7 +15,13 @@ import Foundation
 ///   5. Multi-letter standalone English words inside a Chinese-heavy AX dump
 ///      (often technical brand / product names).
 ///
-/// Output is `\n`-separated, deduplicated, capped at `maxHotwords` entries.
+/// Output is deduplicated. Automatically derived terms (1–5) only fill the
+/// list up to `maxHotwords` entries in total. That cap is deliberately
+/// small: the list becomes part of the ASR prompt, and irrelevant terms
+/// actively hurt. Measured on VibeVoice-ASR-Streaming-7B-4bit with one
+/// test clip: 4 relevant terms plus up to 8 irrelevant ones transcribed
+/// correctly, 24 irrelevant ones made it substitute listed terms for
+/// similar-sounding words that were actually spoken.
 enum HotwordBuilder {
 
     /// Where the user's manual dictionary lives.
@@ -27,8 +33,9 @@ enum HotwordBuilder {
     static func build(
         ambient: AmbientSnapshot?,
         corrections: [Correction],
-        maxHotwords: Int = 80
-    ) -> String {
+        maxHotwords: Int = 16,
+        maxUserHotwords: Int = 32
+    ) -> [String] {
         var ordered: [String] = []
         var seen = Set<String>()
 
@@ -42,9 +49,11 @@ enum HotwordBuilder {
 
         // 0. User-curated list. Highest priority so the user can guarantee
         // specific terms always ride along with every ASR request.
+        // The user's list has its own, larger cap: it is explicit intent,
+        // whereas the terms below are guesses.
         for t in userHotwords() {
             add(t)
-            if ordered.count >= maxHotwords { break }
+            if ordered.count >= maxUserHotwords { break }
         }
 
         // 1. Recent corrections (user-validated, scoped to this app).
@@ -64,7 +73,7 @@ enum HotwordBuilder {
             }
         }
 
-        return ordered.joined(separator: "\n")
+        return ordered
     }
 
     /// Parse `~/.SuperVibe/hotwords.txt`. Lines starting with `#` or `//`
@@ -127,12 +136,32 @@ enum HotwordBuilder {
             hits.append(String(match.output))
         }
 
-        // Standalone English words of length 4+ embedded in non-English text.
-        // Heuristic: bracketed by non-letter (including CJK) on both sides.
-        for match in text.matches(of: #/(?:^|[^A-Za-z])([A-Za-z]{4,20})(?:[^A-Za-z]|$)/#) {
-            hits.append(String(match.output.1))
+        // Standalone English words of length 4+ embedded in CJK-heavy text
+        // (often brand / product names). In predominantly English text this
+        // rule would match every ordinary word, so it is skipped there.
+        // The trailing delimiter is a lookahead: consuming it would make the
+        // next word unmatchable when the two are separated by one character.
+        if isCJKHeavy(text) {
+            for match in text.matches(of: #/(?:^|[^A-Za-z])([A-Za-z]{4,20})(?![A-Za-z])/#) {
+                hits.append(String(match.output.1))
+            }
         }
 
         return hits
+    }
+
+    /// True when at least a fifth of the letters are CJK ideographs or kana.
+    private static func isCJKHeavy(_ text: String) -> Bool {
+        var cjk = 0, letters = 0
+        for scalar in text.unicodeScalars where scalar.properties.isAlphabetic {
+            letters += 1
+            switch scalar.value {
+            case 0x3040...0x30FF, 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xAC00...0xD7AF:
+                cjk += 1
+            default:
+                break
+            }
+        }
+        return letters > 0 && cjk * 5 >= letters
     }
 }

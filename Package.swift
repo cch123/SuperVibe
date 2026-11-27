@@ -13,6 +13,11 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "SuperVibeTests",
+            dependencies: ["SuperVibe"],
+            path: "Tests/SuperVibeTests"
+        ),
     ]
 )
